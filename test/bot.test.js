@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GitHub, main, TAG, SUMMARY, CONTEXT, blacklist, excluded, messages, systemPrompt, validateResult, generate, request } from '../src/index.js';
+import { GitHub, main, TAG, SUMMARY, CONTEXT, blacklist, excluded, messages, systemPrompt, validateResult, generate, request, readContext } from '../src/index.js';
 
 test('stable prefix preserves system and context when source changes', () => {
   const a = messages('prompt', 'rules', [{ body: 'context' }], { body: 'old' });
@@ -70,13 +70,13 @@ class FakeGitHub {
   rows = [{ id: 'human', number: 1, title: 'Question', body: '/ask what?', url: 'https://example.test/1', createdAt: '0', author: { login: 'alice' }, category: { id: 'general', name: 'General' } }];
   comments = new Map(); docs = new Map(); created = 0;
   async discussions() { return { meta: { id: 'repo', discussionCategories: { nodes: [{ id: 'general', name: 'General', isAnswerable: false }] } }, discussions: structuredClone(this.rows) }; }
-  async create(repo, category, title, body) { const row = { id: title, number: this.rows.length + 1, body }; this.rows.push(row); return row; }
+  async create(repo, category, title, body) { const row = { id: title, number: this.rows.length + 1, body, author: { login: 'discussion-curator', __typename: 'Bot' } }; this.rows.push(row); return row; }
   async connection(id) { return structuredClone(this.comments.get(id) ?? []); }
   async comment(discussion, body, existing, replyToId) {
     const destination = replyToId || discussion;
     if (!this.comments.has(destination)) this.comments.set(destination, []);
     if (existing) [...this.comments.values()].flat().find(c => c.id === existing).body = body;
-    else { existing = String(++this.created); this.comments.get(destination).push({ id: existing, body, createdAt: '0' }); }
+    else { existing = String(++this.created); this.comments.get(destination).push({ id: existing, body, createdAt: '0', author: { login: 'discussion-curator', __typename: 'Bot' } }); }
     return existing;
   }
   async deleteComment(id) { for (const [key, rows] of this.comments) this.comments.set(key, rows.filter(c => c.id !== id)); }
@@ -143,8 +143,11 @@ test('an ask still receives its own answer when a schedule already summarized it
 });
 test('trusted context is sorted, introduction is omitted and model cannot write context', async () => {
   const options = fixture();
-  options.gh.rows.push({ id: 'ctx', number: 2, body: CONTEXT });
-  options.gh.comments.set('ctx', [{ id: 'b', createdAt: '2', body: 'second' }, { id: 'a', createdAt: '1', body: 'first' }]);
+  options.env.BOT_APP_LOGIN = 'discussion-curator'; options.env.GITHUB_REPOSITORY = 'owner/repo';
+  const author = { login: 'discussion-curator', __typename: 'Bot' };
+  const row = (id, time, content, role = 'user') => ({ id, createdAt: time, author, body: `${TAG}\n<!-- context-record:v1 -->\n` + JSON.stringify({ repo: 'owner/repo', id, messages: [{ role, content }] }) });
+  options.gh.rows.push({ id: 'ctx', number: 2, body: CONTEXT, author });
+  options.gh.comments.set('ctx', [row('b', '2', 'second', 'assistant'), row('a', '1', 'first')]);
   options.llm = async msg => {
     assert.deepEqual(msg.slice(2, 4).map(m => m.content), ['first', 'second']);
     assert.ok(!msg.some(m => m.content === CONTEXT));
@@ -152,7 +155,21 @@ test('trusted context is sorted, introduction is omitted and model cannot write 
   };
   const old = structuredClone(options.gh.comments.get('ctx'));
   await main(options);
-  assert.deepEqual(options.gh.comments.get('ctx'), old);
+  assert.deepEqual(options.gh.comments.get('ctx').slice(0, 2), old);
+  assert.equal(options.gh.comments.get('ctx').length, 3);
+  const count = options.gh.created;
+  await main(options);
+  assert.equal(options.gh.created, count);
+});
+test('context rejects humans, other apps, foreign repositories and human edits', () => {
+  const author = { login: 'discussion-curator', __typename: 'Bot' };
+  const body = `${TAG}\n<!-- context-record:v1 -->\n` + JSON.stringify({ repo: 'owner/repo', id: 'event', messages: [{ role: 'user', content: 'untrusted human data remains user' }] });
+  const good = { id: '1', createdAt: '1', author, body };
+  assert.equal(readContext([good], 'owner/repo', author.login).length, 1);
+  for (const row of [{ ...good, author: { login: 'human', __typename: 'User' } }, { ...good, author: { login: 'other', __typename: 'Bot' } }, { ...good, editor: { login: 'human', __typename: 'User' } }]) {
+    assert.equal(readContext([row], 'owner/repo', author.login).length, 0);
+  }
+  assert.equal(readContext([good], 'owner/other-repo', author.login).length, 0);
 });
 test('failed doc write is retried by editing existing summary instead of duplicating', async () => {
   const options = fixture(); let fail = true;

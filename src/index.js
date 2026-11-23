@@ -12,7 +12,7 @@ setDefaultAutoSelectFamilyAttemptTimeout(2000);
 export const TAG = '<!-- discussion-curator:v1 -->';
 export const SUMMARY = `${TAG}\n<!-- summary -->`;
 export const CONTEXT = `${TAG}\n<!-- context -->`;
-const fields = 'id body createdAt author{login __typename} viewerCanUpdate';
+const fields = 'id body createdAt author{login __typename} editor{login __typename} viewerCanUpdate';
 export const hash = text => createHash('sha256').update(text).digest('hex');
 export function stable(value) {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -136,8 +136,29 @@ export async function systemPrompt(env = process.env) {
 }
 export function messages(prompt, rules, context, source) {
   return [{ role: 'system', content: prompt }, { role: 'system', content: rules },
-    ...context.map(c => ({ role: 'system', content: c.body })),
+    ...context.flatMap(c => c.messages ?? [{ role: 'system', content: c.body }]),
     { role: 'user', content: stable(source) }];
+}
+const JOURNAL = `${TAG}\n<!-- context-record:v1 -->\n`;
+export function readContext(rows, repo, appLogin) {
+  if (!repo || !appLogin) return [];
+  const login = appLogin.replace(/\[bot\]$/, '').toLowerCase();
+  const owned = actor => actor?.__typename === 'Bot' && actor.login.replace(/\[bot\]$/, '').toLowerCase() === login;
+  const records = [];
+  for (const row of [...rows].sort(byCreated)) {
+    if (!owned(row.author) || (row.editor && !owned(row.editor)) || !row.body.startsWith(JOURNAL)) continue;
+    let record;
+    try { record = JSON.parse(row.body.slice(JOURNAL.length)); } catch { continue; }
+    if (record.repo !== repo || !Array.isArray(record.messages) || record.messages.some(m => !['user', 'assistant'].includes(m.role) || typeof m.content !== 'string')) continue;
+    records.push({ ...row, recordId: record.id, messages: record.messages });
+  }
+  return records;
+}
+export async function appendContext(gh, root, existing, record, appLogin) {
+  if (!appLogin || !record.repo || existing.some(c => c.recordId === record.id)) return;
+  const body = JOURNAL + stable(record);
+  if (body.length > 60000) throw new Error('Context record exceeds GitHub comment limit');
+  await gh.comment(root, body);
 }
 export function validateResult(value) {
   if (!value || typeof value.summary !== 'string' || !value.summary.trim()) throw new Error('Model response missing summary');
@@ -180,7 +201,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
       const category = env.BOT_CATEGORY ? categories.find(c => c.name === env.BOT_CATEGORY) : categories.find(c => !c.isAnswerable);
       if (!category) throw new Error('Enable Discussions and configure BOT_CATEGORY as an open category');
       const description = kind === 'summary' ? '自动总结索引：每个板块一条回复；正文与 doc/discussions 完全一致。' :
-        '固定上下文入口。主帖不进入模型上下文。管理员在下面追加稳定背景或规则；脚本按创建时间、ID 顺序读取所有一级回复作为可信上下文。模型无权修改本帖或回复。修改旧回复将影响后续缓存。';
+        '仓库隔离的追加式上下文。主帖不进入模型输入。脚本只读取当前 App 写入且未被其他身份编辑的结构化记录，按创建顺序保留 user/assistant 角色；人类与其他机器人评论不参与上下文。模型不能修改本帖。';
       roots[kind] = await gh.create(meta.id, category.id, `Discussion Bot — ${kind}`, `${marker}\n\n${description}`);
     }
   }
@@ -191,7 +212,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     console.log('Configure LLM_API_KEY secret and LLM_MODEL variable to enable generation.');
     return;
   }
-  const context = (await gh.connection(roots.context.id, 'comments')).sort(byCreated);
+  const context = readContext(await gh.connection(roots.context.id, 'comments'), env.GITHUB_REPOSITORY, env.BOT_APP_LOGIN);
   const existing = await gh.connection(roots.summary.id, 'comments');
   const groups = new Map(meta.discussionCategories.nodes.map(c => [c.id, []]));
   const threads = new Map();
@@ -220,7 +241,8 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const previous = existing.find(c => c.body.startsWith(prefix));
     if (!items.length && !previous) continue;
     const source = { discussions: items };
-    const fingerprint = hash(stable([messages(prompt, rules, context, source), env.LLM_MODEL, env.LLM_BASE_URL]));
+    // Appending history must not make unchanged discussions dirty on every scheduled run.
+    const fingerprint = hash(stable([messages(prompt, rules, [], source), env.LLM_MODEL, env.LLM_BASE_URL]));
     const stamp = `<!-- input:${fingerprint} -->`;
     const current = items.find(d => d.number === target.number);
     const currentComment = current?.comments.find(c => c.id === event.comment?.node_id);
@@ -231,9 +253,15 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const origin = trigger.comment || target.node_id;
     const replyPrefix = `${TAG}\n<!-- reply:${origin} -->`;
     const old = (threads.get(current?.id) ?? []).find(c => c.body.startsWith(replyPrefix));
-    const requestStamp = `<!-- request:${hash(stable([prompt, rules, context, current?.id, trigger.body, origin]))} -->`;
+    const requestStamp = `<!-- request:${hash(stable([prompt, rules, current?.id, trigger.body, origin]))} -->`;
+    const record = { repo: env.GITHUB_REPOSITORY, id: hash(stable([category, fingerprint, trigger.active ? origin : null, trigger.body])), messages: [] };
     const summaryUnchanged = previous?.body.includes(stamp);
-    if (summaryUnchanged && (!explicit || old?.body.includes(requestStamp))) { await gh.doc(key, previous.body); continue; }
+    if (summaryUnchanged && (!explicit || old?.body.includes(requestStamp))) {
+      await gh.doc(key, previous.body);
+      record.messages = [{ role: 'user', content: stable({ discussion: target.number ?? null, comment: trigger.comment, body: trigger.body, category, source_version: fingerprint }) }, { role: 'assistant', content: stable({ summary: previous.body.split('\n\n').slice(1).join('\n\n'), reply: old?.body.split('\n\n').slice(1).join('\n\n') ?? null }) }];
+      if (trigger.active) await appendContext(gh, roots.context.id, context, record, env.BOT_APP_LOGIN);
+      continue;
+    }
     if (previous?.viewerCanUpdate === false) {
       throw new Error('GitHub App cannot edit the summary comment. Check its installation, Discussions read/write permission and comment ownership. No LLM request was sent for this section.');
     }
@@ -261,6 +289,8 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     // Final stamp is published only after doc/reply writes succeed, allowing safe retries.
     await gh.doc(key, body);
     await gh.comment(roots.summary.id, body, savedId);
+    record.messages = [{ role: 'user', content: stable({ discussion: target.number ?? null, comment: trigger.comment, body: trigger.body, category, source_version: fingerprint }) }, { role: 'assistant', content: stable(result) }];
+    await appendContext(gh, roots.context.id, context, record, env.BOT_APP_LOGIN);
   }
 }
 
