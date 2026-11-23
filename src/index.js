@@ -299,6 +299,9 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     trigger.reply_scope = 'Answer only trigger.body. Historical asks are background, not the current question. A short request to reply should receive an acknowledgement and a request for specifics, not an answer to old questions.';
     trigger.thread = currentComment ? (threads.get(current.id) ?? []).filter(c => c.id === (currentComment.parentId || currentComment.id) || c.parentId === (currentComment.parentId || currentComment.id)) : [];
     source.trigger = trigger;
+    if (proposalTableRequired) {
+      source.output_check = '输出前逐行追溯原文：一个方案只解决一个可独立决策的问题；状态依据直接对应本行方案；另一个方案的讨论不能当成本行证据。将讨论过但未拍板的方案留在讨论待确认。';
+    }
     const outputRules = proposalTableRequired ? `${rules}\n\n${proposalInstructions}` : rules;
     // Historical summaries can repeat stale decisions. Retain the current thread on replies.
     const inputContext = proposalTableRequired && !trigger.active ? [] : context;
