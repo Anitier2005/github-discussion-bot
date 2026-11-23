@@ -1,0 +1,39 @@
+name: Discussion bot
+on:
+  discussion:
+    types: [created, edited, deleted, category_changed]
+  discussion_comment:
+    types: [created, edited, deleted]
+  workflow_dispatch:
+    inputs:
+      init_only:
+        description: Only initialize summary and context discussions
+        type: boolean
+        default: false
+  schedule:
+    - cron: '17 * * * *'
+permissions:
+  contents: write
+  discussions: write
+concurrency:
+  group: discussion-bot
+  cancel-in-progress: false
+jobs:
+  curate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Replace REPLACE_WITH_COMMIT_SHA with the published personal repository commit.
+      - uses: Anitier2005/github-discussion-bot@REPLACE_WITH_COMMIT_SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL || 'https://api.openai.com/v1' }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          BOT_BLACKLIST: ${{ vars.BOT_BLACKLIST || '{}' }}
+          BOT_CATEGORY: ${{ vars.BOT_CATEGORY }}
+          BOT_RULES_PATH: .github/discussion-bot/rules.md
+          BOT_INIT_ONLY: ${{ inputs.init_only && 'true' || 'false' }}

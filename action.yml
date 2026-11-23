@@ -1,0 +1,12 @@
+name: Discussion curator
+description: Summarize discussions and mirror identical Markdown into doc
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - shell: bash
+      env:
+        BOT_ACTION_PATH: ${{ github.action_path }}
+      run: python "$BOT_ACTION_PATH/bot.py"
