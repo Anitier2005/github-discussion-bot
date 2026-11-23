@@ -108,7 +108,7 @@ export function decodeAttachment(bytes, mime, url, env = {}) {
   else if (/^GIF8[79]a/.test(bytes.subarray(0, 6).toString())) type = 'image/gif';
   else if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') type = 'image/webp';
   if (type) return { kind: 'image', part: { type: 'image_url', image_url: { url: `data:${type};base64,${bytes.toString('base64')}` } } };
-  if (bytes.toString('ascii', 0, 5) === '%PDF-') return { kind: 'pdf', part: { type: 'file', file: { filename: name.endsWith('.pdf') ? name : 'attachment.pdf', file_data: env.LLM_BASE_URL?.includes('volces.com') ? bytes.toString('base64') : `data:application/pdf;base64,${bytes.toString('base64')}` } } };
+  if (bytes.toString('ascii', 0, 5) === '%PDF-') return { kind: 'pdf', part: { type: 'file', file: { filename: name.endsWith('.pdf') ? name : 'attachment.pdf', file_data: `data:application/pdf;base64,${bytes.toString('base64')}` } } };
   let text;
   if (/\.(docx|pptx|xlsx)$/i.test(name)) text = officeText(bytes);
   else if (/\.(txt|md|csv|tsv|json|log|ya?ml|xml|html|js|ts|py|c|cpp|rs|go)$/i.test(name) || mime.startsWith('text/') || mime === 'application/json') {

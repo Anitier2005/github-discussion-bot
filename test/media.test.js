@@ -31,7 +31,7 @@ test('unread attachments retain explicit errors and never fake contents', async 
 test('PDF uses actual base64 and text extraction is bounded with truncation flag', () => {
   const pdf = Buffer.from('%PDF-1.4\nfixture');
   const result = decodeAttachment(pdf, 'application/pdf', 'https://github.com/a.pdf', { LLM_BASE_URL: 'https://ark.cn-beijing.volces.com/api/v3' });
-  assert.equal(result.part.type, 'file'); assert.equal(result.part.file.file_data, pdf.toString('base64'));
+  assert.equal(result.part.type, 'file'); assert.equal(result.part.file.file_data, 'data:application/pdf;base64,' + pdf.toString('base64'));
   const text = decodeAttachment(Buffer.from('x'.repeat(50000)), 'text/plain', 'https://github.com/notes.txt');
   assert.equal(text.truncated, true); assert.equal(text.part.text.length, 40000);
   assert.throws(() => decodeAttachment(Buffer.from([0,1,2]), 'application/zip', 'https://github.com/archive.zip'), /unsupported/);
