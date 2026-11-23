@@ -10,6 +10,12 @@ import bot
 
 
 class Tests(unittest.TestCase):
+    def test_system_prompt_variable_and_file_fallback(self):
+        with patch.dict(os.environ, {'BOT_SYSTEM_PROMPT': 'custom system prompt'}):
+            self.assertEqual(bot.system_prompt(), 'custom system prompt')
+        with patch.dict(os.environ, {'BOT_SYSTEM_PROMPT': '  '}):
+            self.assertEqual(bot.system_prompt(), (bot.ROOT/'.github/prompts/system.md').read_text(encoding='utf-8'))
+
     def test_full_reconcile_and_edit_reuse(self):
         class FakeGitHub:
             def __init__(self):

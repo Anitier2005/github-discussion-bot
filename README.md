@@ -15,6 +15,7 @@ Settings → Secrets and variables → Actions：
 | Variable | LLM_BASE_URL | OpenAI 兼容接口根地址，默认 https://api.openai.com/v1 |
 | Variable | BOT_CATEGORY | 汇总和上下文帖的分类名，建议 General |
 | Variable | BOT_BLACKLIST | JSON，例如 `{"users":["someone"],"discussions":[12],"categories":["Off topic"]}` |
+| Variable | BOT_SYSTEM_PROMPT | 系统提示词全文，优先于代码仓库的独立 Markdown 默认文件；留空则回退到文件 |
 
 空黑名单默认为 `{}`。用户名忽略大小写，discussion 为数字编号，分类按名称精确匹配。黑名单用户不触发也不进入总结，所有 `[bot]` 身份及机器人生成内容默认排除。机器人专用上下文帖为可信管理员配置，不应用普通讨论黑名单；请仅由项目维护者编辑该帖评论。
 

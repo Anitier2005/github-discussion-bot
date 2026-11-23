@@ -113,6 +113,11 @@ def excluded(item, blocked):
             or login.endswith('[bot]') or item.get('body', '').startswith(TAG))
 
 
+def system_prompt():
+    override = os.getenv('BOT_SYSTEM_PROMPT', '')
+    return override if override.strip() else (ROOT / '.github/prompts/system.md').read_text(encoding='utf-8')
+
+
 def messages(prompt, rules, context, source):
     # Stable prefix: no timestamps/event IDs; context comments sorted by creation ID.
     return [{'role': 'system', 'content': prompt},
@@ -201,7 +206,7 @@ def main():
         clean.sort(key=lambda c: (c['createdAt'], c['id']))
         discussion['comments'] = clean
         groups.setdefault(discussion['category']['id'], []).append(discussion)
-    prompt = (ROOT / '.github/prompts/system.md').read_text(encoding='utf-8')
+    prompt = system_prompt()
     rules_path = Path(os.getenv('BOT_RULES_PATH', '.github/discussion-bot/rules.md'))
     rules = rules_path.read_text(encoding='utf-8')
     for category, items in sorted(groups.items()):
