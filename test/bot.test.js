@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Anitier2005. See LICENSE for terms and warranty disclaimer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GitHub, main, TAG, SUMMARY, CONTEXT, blacklist, excluded, messages, systemPrompt, validateResult, generate, request, readContext } from '../src/index.js';

@@ -1,4 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Anitier2005
 name: Discussion curator
+author: Anitier2005
 description: Summarize discussions and mirror identical Markdown into doc
 runs:
   using: node24

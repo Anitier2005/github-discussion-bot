@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Anitier2005. See LICENSE for terms and warranty disclaimer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { attachmentLinks, allowedURL, publicAddress, prepareMedia, decodeAttachment, repositoryAsset, downloadHeaders } from '../src/media.js';

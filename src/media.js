@@ -1,3 +1,12 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-only
+ * Copyright (C) 2026 Anitier2005
+ *
+ * This file is part of github-discussion-bot, licensed under version 3
+ * of the GNU General Public License. Distributed WITHOUT ANY WARRANTY;
+ * without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+ * A PARTICULAR PURPOSE. See the LICENSE file for the complete terms.
+ */
 import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';

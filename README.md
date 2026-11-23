@@ -1,5 +1,7 @@
 # Discussion curator
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 原生 JavaScript GitHub Action，运行于 Node.js 24，使用内置 fetch，无第三方运行时依赖，无需安装或打包。实现代码放在个人仓库，目标组织仓库只保存 workflow、项目规范与生成的 doc。
 
 完整安装、配置示例、提示词与缓存机制、回复规则和排错说明见 **[详细使用指南](docs/guide.md)**。
@@ -42,3 +44,13 @@
 Actions → Discussion bot → Run workflow；选 init_only 只建立两个帖，不消耗 LLM。配好 API 后在普通板块创建测试帖，编辑原文、发 `/ask` 并检查 doc 与汇总评论。`npm test` 或 `node --test` 执行本地测试。
 
 模型一次处理一个板块全部当前内容；为保留语义和稳定前缀不静默截断。大型仓库需选足够上下文窗口和 GitHub 单次请求额度；超限会失败并可重跑。模型没有联网验证能力，纠错可靠性受上下文证据限制。GitHub 评论和文件提交不是跨资源事务，失败时可能短暂不同步，重跑会修复。正文校验限制 55000 字符。不要在可信上下文或项目规范中放秘密。目标分支若保护禁止直接写入，需为机器人配置允许的写入策略或后续扩展 PR 模式。
+
+## 许可证
+
+Copyright (C) 2026 Anitier2005。
+
+本项目采用 **GNU General Public License version 3 only（GPL-3.0-only，仅第 3 版）**，完整条款见 [LICENSE](LICENSE)。适用于本仓库的原创源码、测试、提示词、文档及部署模板。
+
+你可以按 GPL v3 使用、修改和再分发本项目；再分发时应保留版权及许可证声明，并按许可证要求提供对应源码。本软件不提供任何担保。
+
+工作流引用的第三方 Action 仍遵循各自许可证。配置中的 App 私钥、模型密钥不属于应分享的源码，不要提交到仓库。
