@@ -86,6 +86,40 @@ class FakeGitHub {
 }
 const fixture = () => ({ gh: new FakeGitHub(), env: { LLM_API_KEY: 'test', LLM_MODEL: 'model' },
   prompt: 'system', rules: 'rules', event: { sender: { login: 'alice' }, discussion: { number: 1, node_id: 'human', body: '/ask what?' } } });
+test('proposal summaries rebuild matching legacy cache and publish source-backed rows', async () => {
+  const options = fixture();
+  options.event = {};
+  options.rules = '议题、方案、状态、提出者、判定依据、来源';
+  options.gh.rows[0].body = '先提议用粗粒度锁，现明确撤回该方案。';
+  const proposal = { topic: '并发控制', plan: '粗粒度锁', status: '已放弃', proposer_ids: ['human'],
+    evidence_id: 'human', evidence_quote: '现明确撤回该方案', basis: '提出者明确撤回' };
+  let calls = 0;
+  options.llm = async () => {
+    calls++;
+    return { summary: '## 测试\n\n<!-- proposal-table -->', proposals: [proposal], reply: null };
+  };
+  await main(options);
+  const root = options.gh.rows.find(d => d.body.startsWith(SUMMARY));
+  const comment = options.gh.comments.get(root.id)[0];
+  assert.match(comment.body, /粗粒度锁 \| 已放弃 \| @alice/);
+  assert.match(comment.body, /\[#1\]\(https:\/\/example.test\/1\)/);
+  assert.equal(comment.body, [...options.gh.docs.values()][0]);
+  await main(options);
+  assert.equal(calls, 1);
+
+  // Keep the matching input stamp to exercise the cache path.
+  comment.body = comment.body.split('\n\n')[0] + '\n\n### 决定与共识\n\n旧版总结';
+  const previousDoc = [...options.gh.docs.values()][0];
+  const validLlm = options.llm;
+  options.llm = async () => ({ summary: '<!-- proposal-table -->', proposals: [{ ...proposal, evidence_quote: '不存在的引用' }] });
+  await assert.rejects(main(options), /evidence quote/);
+  assert.match(comment.body, /旧版总结/);
+  assert.equal([...options.gh.docs.values()][0], previousDoc);
+  options.llm = validLlm;
+  await main(options);
+  assert.equal(calls, 2);
+  assert.equal(comment.body, previousDoc);
+});
 test('reconcile summarizes once, syncs bytes, reuses replies on edit and removes deleted sources', async () => {
   const options = fixture(); let calls = 0;
   options.llm = async () => { calls++; return { summary: '# 共识\n需要证据', reply: { reason: 'ask', body: 'answer' } }; };

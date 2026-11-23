@@ -22,6 +22,7 @@ import { resolve } from 'node:path';
 import { setDefaultResultOrder } from 'node:dns';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { prepareMedia } from './media.js';
+import { proposalFormat, proposalInstructions, hasProposalTable, renderProposals } from './proposals.js';
 
 // Hosted runners can have slow cross-region IPv4 handshakes and unusable IPv6.
 setDefaultResultOrder('ipv4first');
@@ -257,6 +258,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
   }
   prompt ??= await systemPrompt(env);
   rules ??= await readFile(env.BOT_RULES_PATH || '.github/discussion-bot/rules.md', 'utf8');
+  const proposalTableRequired = rules.includes('议题、方案、状态、提出者、判定依据、来源');
   llm ??= msg => generate(msg, env);
   for (const [category, items] of [...groups].sort(([a], [b]) => compare(a, b))) {
     const key = hash(category).slice(0, 16);
@@ -267,7 +269,9 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const media = await prepareMedia(items, env, mediaLoader);
     const source = { discussions: items };
     // Appending history must not make unchanged discussions dirty on every scheduled run.
-    const fingerprint = hash(stable([messages(prompt, rules, [], source), env.LLM_MODEL, env.LLM_BASE_URL]));
+    const fingerprintInputs = [messages(prompt, rules, [], source), env.LLM_MODEL, env.LLM_BASE_URL];
+    if (proposalTableRequired) fingerprintInputs.push(proposalFormat);
+    const fingerprint = hash(stable(fingerprintInputs));
     const stamp = `<!-- input:${fingerprint} -->`;
     const current = items.find(d => d.number === target.number);
     const currentComment = current?.comments.find(c => c.id === event.comment?.node_id);
@@ -280,7 +284,8 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const old = (threads.get(current?.id) ?? []).find(c => c.body.startsWith(replyPrefix));
     const requestStamp = `<!-- request:${hash(stable([prompt, rules, current?.id, trigger.body, currentComment?.attachments ?? current?.attachments, origin]))} -->`;
     const record = { repo: env.GITHUB_REPOSITORY, id: hash(stable([category, fingerprint, trigger.active ? origin : null, trigger.body])), messages: [] };
-    const summaryUnchanged = previous?.body.includes(stamp);
+    const summaryUnchanged = previous?.body.includes(stamp)
+      && (!proposalTableRequired || !items.length || hasProposalTable(previous.body));
     if (summaryUnchanged && (!explicit || old?.body.includes(requestStamp))) {
       await gh.doc(key, previous.body);
       record.messages = [{ role: 'user', content: stable({ discussion: target.number ?? null, comment: trigger.comment, body: trigger.body, category, source_version: fingerprint }) }, { role: 'assistant', content: stable({ summary: previous.body.split('\n\n').slice(1).join('\n\n'), reply: old?.body.split('\n\n').slice(1).join('\n\n') ?? null }) }];
@@ -294,16 +299,13 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     trigger.reply_scope = 'Answer only trigger.body. Historical asks are background, not the current question. A short request to reply should receive an acknowledgement and a request for specifics, not an answer to old questions.';
     trigger.thread = currentComment ? (threads.get(current.id) ?? []).filter(c => c.id === (currentComment.parentId || currentComment.id) || c.parentId === (currentComment.parentId || currentComment.id)) : [];
     source.trigger = trigger;
-    const proposalTableRequired = rules.includes('议题、方案、状态、提出者、判定依据、来源');
-    if (proposalTableRequired) source.output_requirements = '按当前项目规范输出“方案状态”表，表头为“议题 | 方案 | 状态 | 提出者 | 判定依据 | 来源”。使用规范中的五种状态原文。禁止旧版“决定与共识”表。无方案时写“无方案”。以当前 discussions 原文为准，不复用历史总结。';
-    const result = validateResult(items.length ? await llm(messages(prompt, rules, context, source, media.parts)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
+    const outputRules = proposalTableRequired ? `${rules}\n\n${proposalInstructions}` : rules;
+    // Historical summaries can repeat stale decisions. Retain the current thread on replies.
+    const inputContext = proposalTableRequired && !trigger.active ? [] : context;
+    const result = validateResult(items.length ? await llm(messages(prompt, outputRules, inputContext, source, media.parts)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
     if (proposalTableRequired && items.length) {
-      const heading = /^#{2,6}\s+方案状态\s*$/m.test(result.summary);
-      const header = /^\|\s*议题\s*\|\s*方案\s*\|\s*状态\s*\|\s*提出者\s*\|\s*判定依据\s*\|\s*来源\s*\|\s*$/m.test(result.summary);
-      const empty = /^\s*无方案[。.]?\s*$/m.test(result.summary);
-      if (!heading || (!header && !empty) || /^#{2,6}\s+决定与共识\s*$/m.test(result.summary)) {
-        throw new Error('Summary does not follow the proposal-status format; previous summary was preserved.');
-      }
+      result.summary = renderProposals(result, items);
+      validateResult(result);
     }
     if (explicit && !result.reply) result.reply = { reason: 'ask', body: '收到你的 /ask。请告诉我具体想问的问题，我会针对这条消息回答。' };
     const pending = `${prefix}\n${stamp.replace('input:', 'pending:')}\n\n${result.summary}`;
