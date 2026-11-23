@@ -8,7 +8,7 @@
 
 目标仓库启用 Discussions，保留至少一个开放讨论分类（不是只允许维护者发帖的公告分类）。复制 `deploy/discussion-bot.yml` 到目标 `.github/workflows/`，将 Action 引用固定为发布的完整 commit SHA。复制 `.github/discussion-bot/rules.md` 到目标同路径，并按项目要求编辑。
 
-Settings → Secrets and variables → Actions：
+目标仓库或所属组织的 Settings → Secrets and variables → Actions（组织级配置需授权目标仓库；Free 组织的私有仓库不支持使用组织级 Secrets/Variables，详见使用指南）：
 
 | 类型 | 名称 | 内容 |
 |---|---|---|

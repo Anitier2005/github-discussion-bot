@@ -2,7 +2,11 @@
 
 ## 配置位置
 
-所有运行配置放在**目标仓库** `bot-test-org-bot/test` → Settings → Secrets and variables → Actions。个人代码仓库中的 Secret 不会自动传给目标仓库工作流。
+运行配置支持两种位置：目标仓库 `bot-test-org-bot/test` → Settings → Secrets and variables → Actions；或其所属组织 → Settings → Secrets and variables → Actions，并授权目标仓库。个人代码仓库中的 Secret 不会自动传给目标仓库工作流。
+
+**组织级配置限制：** GitHub Free 组织的私有仓库不能使用组织级 Actions Secrets 和 Variables。此时可在目标仓库配置同名 Secret/Variable，或升级组织套餐后使用组织级配置。不要仅为传递密钥将私有仓库改为公开。组织配置的可见范围还需包含目标仓库；选择 `Selected repositories` 时将目标仓库加入列表。[GitHub 官方说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
+
+组织级配置仍使用相同的 `${{ secrets.LLM_API_KEY }}` 和 `${{ vars.LLM_MODEL }}` 表达式，无需给工作流添加 environment。GitHub 的 **Environment** 是另一类仓库级部署环境配置，需要 job 显式声明环境名称。本模板没有绑定 Environment。同名仓库级 Variable 会覆盖组织级 Variable；若希望统一由组织管理，应清除不再需要的仓库级同名覆盖项。
 
 | 标签页 | 名称 | 内容 |
 | --- | --- | --- |
@@ -145,7 +149,7 @@ node --test
 | 现象 | 检查 |
 | --- | --- |
 | 成功却没总结 | 只有专用帖、全在黑名单、init_only 或模型配置缺失都会跳过 |
-| 配置缺失 | 是否放在目标仓库 Actions，名称是否完全一致；Environment Secret 需 job 指定环境，本模板没有指定 |
+| 配置缺失 | 是否放在 Actions 配置，名称是否完全一致；组织级配置是否授权目标仓库、套餐是否支持私有仓库；Environment Secret 需 job 指定环境，本模板没有指定 |
 | 401 | 密钥是否正确、是否对应服务商 |
 | 403 | Actions/组织权限、分类权限、分支保护、服务商限制 |
 | 404 | API 地址、模型、仓库资源可见性 |
