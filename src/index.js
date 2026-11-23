@@ -16,7 +16,7 @@ export function stable(value) {
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const byCreated = (a, b) => compare(a.createdAt, b.createdAt) || compare(a.id, b.id);
 
-export async function request(url, token, payload, method, fetcher = fetch) {
+export async function request(url, token, payload, method, fetcher = fetch, timeoutMs = 120000) {
   let response;
   try {
     response = await fetcher(url, {
@@ -24,10 +24,11 @@ export async function request(url, token, payload, method, fetcher = fetch) {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
         Accept: 'application/vnd.github+json', 'User-Agent': 'discussion-curator' },
       body: payload === undefined ? undefined : JSON.stringify(payload),
-      signal: AbortSignal.timeout(120000), redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs), redirect: 'error',
     });
-  } catch {
-    throw new Error(`Request failed for ${new URL(url).host}; check network and endpoint`);
+  } catch (error) {
+    const code = error.name === 'TimeoutError' ? 'TIMEOUT' : String(error.cause?.code ?? 'NETWORK_ERROR').replace(/[^A-Z0-9_]/g, '').slice(0, 40);
+    throw new Error(`Request failed for ${new URL(url).host} (${code}); check network and endpoint`);
   }
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status} from ${new URL(url).host}`);
@@ -139,9 +140,11 @@ export function validateResult(value) {
 export async function generate(msg, env = process.env, transport = request) {
   const endpoint = (env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
   if (new URL(endpoint).protocol !== 'https:') throw new Error('LLM_BASE_URL must use HTTPS');
+  const seconds = Number(env.LLM_TIMEOUT_SECONDS || 300);
+  if (!Number.isInteger(seconds) || seconds < 30 || seconds > 600) throw new Error('LLM_TIMEOUT_SECONDS must be an integer from 30 to 600');
   const response = await transport(`${endpoint}/chat/completions`, env.LLM_API_KEY, {
     model: env.LLM_MODEL, messages: msg, response_format: { type: 'json_object' },
-  });
+  }, undefined, undefined, seconds * 1000);
   let value;
   try { value = JSON.parse(response.choices[0].message.content); } catch { throw new Error('Model response is not a JSON object'); }
   return validateResult(value);
