@@ -294,7 +294,17 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     trigger.reply_scope = 'Answer only trigger.body. Historical asks are background, not the current question. A short request to reply should receive an acknowledgement and a request for specifics, not an answer to old questions.';
     trigger.thread = currentComment ? (threads.get(current.id) ?? []).filter(c => c.id === (currentComment.parentId || currentComment.id) || c.parentId === (currentComment.parentId || currentComment.id)) : [];
     source.trigger = trigger;
+    const proposalTableRequired = rules.includes('议题、方案、状态、提出者、判定依据、来源');
+    if (proposalTableRequired) source.output_requirements = '按当前项目规范输出“方案状态”表，表头为“议题 | 方案 | 状态 | 提出者 | 判定依据 | 来源”。使用规范中的五种状态原文。禁止旧版“决定与共识”表。无方案时写“无方案”。以当前 discussions 原文为准，不复用历史总结。';
     const result = validateResult(items.length ? await llm(messages(prompt, rules, context, source, media.parts)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
+    if (proposalTableRequired && items.length) {
+      const heading = /^#{2,6}\s+方案状态\s*$/m.test(result.summary);
+      const header = /^\|\s*议题\s*\|\s*方案\s*\|\s*状态\s*\|\s*提出者\s*\|\s*判定依据\s*\|\s*来源\s*\|\s*$/m.test(result.summary);
+      const empty = /^\s*无方案[。.]?\s*$/m.test(result.summary);
+      if (!heading || (!header && !empty) || /^#{2,6}\s+决定与共识\s*$/m.test(result.summary)) {
+        throw new Error('Summary does not follow the proposal-status format; previous summary was preserved.');
+      }
+    }
     if (explicit && !result.reply) result.reply = { reason: 'ask', body: '收到你的 /ask。请告诉我具体想问的问题，我会针对这条消息回答。' };
     const pending = `${prefix}\n${stamp.replace('input:', 'pending:')}\n\n${result.summary}`;
     const savedId = await gh.comment(roots.summary.id, pending, previous?.id);
