@@ -48,6 +48,7 @@ jobs:
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           LLM_TIMEOUT_SECONDS: ${{ vars.LLM_TIMEOUT_SECONDS || '300' }}
           BOT_BLACKLIST: ${{ vars.BOT_BLACKLIST || '{}' }}
+          BOT_MEDIA_HOSTS: ${{ vars.BOT_MEDIA_HOSTS }}
           BOT_SYSTEM_PROMPT: ${{ vars.BOT_SYSTEM_PROMPT }}
           BOT_CATEGORY: ${{ vars.BOT_CATEGORY }}
           BOT_RULES_PATH: .github/discussion-bot/rules.md

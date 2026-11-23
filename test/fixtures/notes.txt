@@ -1,0 +1,1 @@
+Attachment test configuration: RETRY_BUDGET=7

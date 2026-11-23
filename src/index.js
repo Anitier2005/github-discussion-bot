@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { setDefaultResultOrder } from 'node:dns';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
+import { prepareMedia } from './media.js';
 
 // Hosted runners can have slow cross-region IPv4 handshakes and unusable IPv6.
 setDefaultResultOrder('ipv4first');
@@ -134,10 +135,10 @@ export function excluded(item, blocked) {
 export async function systemPrompt(env = process.env) {
   return env.BOT_SYSTEM_PROMPT?.trim() ? env.BOT_SYSTEM_PROMPT : readFile(new URL('../.github/prompts/system.md', import.meta.url), 'utf8');
 }
-export function messages(prompt, rules, context, source) {
+export function messages(prompt, rules, context, source, media = []) {
   return [{ role: 'system', content: prompt }, { role: 'system', content: rules },
     ...context.flatMap(c => c.messages ?? [{ role: 'system', content: c.body }]),
-    { role: 'user', content: stable(source) }];
+    { role: 'user', content: media.length ? [{ type: 'text', text: stable(source) }, ...media] : stable(source) }];
 }
 const JOURNAL = `${TAG}\n<!-- context-record:v1 -->\n`;
 export function readContext(rows, repo, appLogin) {
@@ -180,7 +181,7 @@ export async function generate(msg, env = process.env, transport = request) {
   return validateResult(value);
 }
 
-export async function main({ env = process.env, gh = new GitHub(env), event, llm, rules, prompt } = {}) {
+export async function main({ env = process.env, gh = new GitHub(env), event, llm, rules, prompt, mediaLoader } = {}) {
   const blocked = blacklist(env.BOT_BLACKLIST);
   event ??= JSON.parse(await readFile(env.GITHUB_EVENT_PATH, 'utf8'));
   const actor = event.sender?.login ?? '';
@@ -246,6 +247,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const prefix = `${TAG}\n${marker}`;
     const previous = existing.find(c => c.body.startsWith(prefix));
     if (!items.length && !previous) continue;
+    const media = await prepareMedia(items, env, mediaLoader);
     const source = { discussions: items };
     // Appending history must not make unchanged discussions dirty on every scheduled run.
     const fingerprint = hash(stable([messages(prompt, rules, [], source), env.LLM_MODEL, env.LLM_BASE_URL]));
@@ -259,7 +261,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const origin = trigger.comment || target.node_id;
     const replyPrefix = `${TAG}\n<!-- reply:${origin} -->`;
     const old = (threads.get(current?.id) ?? []).find(c => c.body.startsWith(replyPrefix));
-    const requestStamp = `<!-- request:${hash(stable([prompt, rules, current?.id, trigger.body, origin]))} -->`;
+    const requestStamp = `<!-- request:${hash(stable([prompt, rules, current?.id, trigger.body, currentComment?.attachments ?? current?.attachments, origin]))} -->`;
     const record = { repo: env.GITHUB_REPOSITORY, id: hash(stable([category, fingerprint, trigger.active ? origin : null, trigger.body])), messages: [] };
     const summaryUnchanged = previous?.body.includes(stamp);
     if (summaryUnchanged && (!explicit || old?.body.includes(requestStamp))) {
@@ -275,7 +277,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     trigger.reply_scope = 'Answer only trigger.body. Historical asks are background, not the current question. A short request to reply should receive an acknowledgement and a request for specifics, not an answer to old questions.';
     trigger.thread = currentComment ? (threads.get(current.id) ?? []).filter(c => c.id === (currentComment.parentId || currentComment.id) || c.parentId === (currentComment.parentId || currentComment.id)) : [];
     source.trigger = trigger;
-    const result = validateResult(items.length ? await llm(messages(prompt, rules, context, source)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
+    const result = validateResult(items.length ? await llm(messages(prompt, rules, context, source, media.parts)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
     if (explicit && !result.reply) result.reply = { reason: 'ask', body: '收到你的 /ask。请告诉我具体想问的问题，我会针对这条消息回答。' };
     const pending = `${prefix}\n${stamp.replace('input:', 'pending:')}\n\n${result.summary}`;
     const savedId = await gh.comment(roots.summary.id, pending, previous?.id);
@@ -295,7 +297,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     // Final stamp is published only after doc/reply writes succeed, allowing safe retries.
     await gh.doc(key, body);
     await gh.comment(roots.summary.id, body, savedId);
-    record.messages = [{ role: 'user', content: stable({ discussion: target.number ?? null, comment: trigger.comment, body: trigger.body, category, source_version: fingerprint }) }, { role: 'assistant', content: stable(result) }];
+    record.messages = [{ role: 'user', content: stable({ discussion: target.number ?? null, comment: trigger.comment, body: trigger.body, category, source_version: fingerprint, attachments: media.manifest }) }, { role: 'assistant', content: stable(result) }];
     await appendContext(gh, roots.context.id, context, record, env.BOT_APP_LOGIN);
   }
 }
