@@ -14,6 +14,7 @@ test('blacklist validates types and ignores user case, bot identities and genera
   const blocked = blacklist('{"users":["Alice"]}');
   assert.ok(excluded({ author: { login: 'alice' } }, blocked));
   assert.ok(excluded({ author: { login: 'github-actions[bot]' } }, blocked));
+  assert.ok(excluded({ author: { login: 'custom-app', __typename: 'Bot' } }, blocked));
   assert.ok(excluded({ body: `${TAG}\nsummary` }, blocked));
   assert.ok(!excluded({ author: null, body: 'human' }, blocked));
 });
@@ -131,5 +132,27 @@ test('uneditable pending summary fails before consuming another LLM call', async
   const { hash } = await import('../src/index.js');
   options.gh.comments.set('summary', [{ id: 'existing', body: `${TAG}\n<!-- category:${hash('general').slice(0, 16)} -->\n<!-- pending:old -->`, viewerCanUpdate: false }]);
   options.llm = async () => { assert.fail('LLM should not be called when editing is forbidden'); };
-  await assert.rejects(main(options), /Configure BOT_GITHUB_TOKEN/);
+  await assert.rejects(main(options), /Check its installation/);
+});
+test('App creates its own roots and ignores old bot roots without modifying them', async () => {
+  const options = fixture();
+  options.env.BOT_APP_LOGIN = 'discussion-curator';
+  options.gh.rows.push({ id: 'old-summary', number: 2, body: SUMMARY, author: { login: 'github-actions', __typename: 'Bot' } });
+  options.gh.rows.push({ id: 'old-context', number: 3, body: CONTEXT, author: { login: 'github-actions', __typename: 'Bot' } });
+  const create = options.gh.create.bind(options.gh);
+  options.gh.create = async (...args) => { const row = await create(...args); row.author = { login: 'discussion-curator', __typename: 'Bot' }; return row; };
+  options.llm = async () => ({ summary: 'summary', reply: null });
+  await main(options);
+  assert.equal(options.gh.rows.length, 5);
+  assert.equal(options.gh.comments.has('old-summary'), false);
+  assert.equal(options.gh.comments.has('old-context'), false);
+  await main(options);
+  assert.equal(options.gh.rows.length, 5);
+});
+test('App generated events stop before reads or model calls', async () => {
+  const options = fixture();
+  options.event.sender = { login: 'discussion-curator[bot]', type: 'Bot' };
+  options.gh.discussions = async () => assert.fail('Must not fetch bot-triggered events');
+  options.llm = async () => assert.fail('Must not summarize App events');
+  await main(options);
 });

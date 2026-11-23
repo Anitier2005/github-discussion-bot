@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 export const TAG = '<!-- discussion-curator:v1 -->';
 export const SUMMARY = `${TAG}\n<!-- summary -->`;
 export const CONTEXT = `${TAG}\n<!-- context -->`;
-const fields = 'id body createdAt author{login} viewerCanUpdate';
+const fields = 'id body createdAt author{login __typename} viewerCanUpdate';
 export const hash = text => createHash('sha256').update(text).digest('hex');
 export function stable(value) {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -73,7 +73,7 @@ export class GitHub {
       const data = await this.gql(`query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){
         id discussionCategories(first:100){nodes{id name isAnswerable}}
         discussions(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:ASC}){
-        nodes{id number title body url createdAt author{login} category{id name}}pageInfo{hasNextPage endCursor}}}}`, { owner, name, cursor });
+        nodes{id number title body url createdAt author{login __typename} category{id name}}pageInfo{hasNextPage endCursor}}}}`, { owner, name, cursor });
       meta = data.repository;
       discussions.push(...meta.discussions.nodes);
       cursor = meta.discussions.pageInfo.hasNextPage ? meta.discussions.pageInfo.endCursor : null;
@@ -119,7 +119,7 @@ export function blacklist(raw = '{}') {
 }
 export function excluded(item, blocked) {
   const login = item.author?.login ?? '';
-  return (blocked.users ?? []).some(x => x.toLowerCase() === login.toLowerCase()) || login.endsWith('[bot]') || (item.body ?? '').startsWith(TAG);
+  return (blocked.users ?? []).some(x => x.toLowerCase() === login.toLowerCase()) || item.author?.__typename === 'Bot' || login.endsWith('[bot]') || (item.body ?? '').startsWith(TAG);
 }
 export async function systemPrompt(env = process.env) {
   return env.BOT_SYSTEM_PROMPT?.trim() ? env.BOT_SYSTEM_PROMPT : readFile(new URL('../.github/prompts/system.md', import.meta.url), 'utf8');
@@ -151,13 +151,16 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
   const blocked = blacklist(env.BOT_BLACKLIST);
   event ??= JSON.parse(await readFile(env.GITHUB_EVENT_PATH, 'utf8'));
   const actor = event.sender?.login ?? '';
-  if (excluded({ author: { login: actor } }, blocked)) return;
+  if (event.sender?.type === 'Bot' || excluded({ author: { login: actor } }, blocked)) return;
   const target = event.discussion ?? {};
   if (blocked.discussions.includes(target.number) || blocked.categories.includes(target.category?.name)) return;
   const { meta, discussions } = await gh.discussions();
   const roots = {};
   for (const [kind, marker] of [['summary', SUMMARY], ['context', CONTEXT]]) {
-    const matches = discussions.filter(d => d.body.startsWith(marker));
+    // App installations must own their roots; do not edit the previous Actions bot's posts.
+    const appLogin = env.BOT_APP_LOGIN?.replace(/\[bot\]$/, '').toLowerCase();
+    const matches = discussions.filter(d => d.body.startsWith(marker) && (!appLogin ||
+      d.author?.login.replace(/\[bot\]$/, '').toLowerCase() === appLogin));
     if (matches.length > 1) throw new Error(`Duplicate ${kind} discussions; resolve before continuing`);
     if (matches.length) roots[kind] = matches[0];
     else {
@@ -204,7 +207,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const stamp = `<!-- input:${fingerprint} -->`;
     if (previous?.body.includes(stamp)) { await gh.doc(key, previous.body); continue; }
     if (previous?.viewerCanUpdate === false) {
-      throw new Error('GitHub token cannot edit the summary comment. Configure BOT_GITHUB_TOKEN with Discussions and Contents read/write for this repository. No LLM request was sent for this section.');
+      throw new Error('GitHub App cannot edit the summary comment. Check its installation, Discussions read/write permission and comment ownership. No LLM request was sent for this section.');
     }
     const trigger = { discussion: target.number ?? null, comment: event.comment?.node_id ?? null,
       body: (event.comment ?? target).body ?? '', active: items.some(d => d.number === target.number) };
