@@ -46,7 +46,11 @@ export class GitHub {
   }
   async gql(query, variables = {}) {
     const result = await this.transport('https://api.github.com/graphql', this.token, { query, variables });
-    if (result.errors?.length) throw new Error('GitHub GraphQL failed; check permissions, IDs and Discussions settings');
+    if (result.errors?.length) {
+      const operation = query.match(/(?:mutation|query).*?\{\s*(\w+)/s)?.[1] ?? 'unknown';
+      const details = result.errors.map(e => `${e.type ?? 'GRAPHQL'} ${e.message ?? ''}`.slice(0, 300)).join('; ');
+      throw new Error(`GitHub GraphQL ${operation} failed: ${details}`);
+    }
     return result.data;
   }
   async connection(id, field, selection = fields) {
