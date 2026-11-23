@@ -2,6 +2,12 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { setDefaultResultOrder } from 'node:dns';
+import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
+
+// Hosted runners can have slow cross-region IPv4 handshakes and unusable IPv6.
+setDefaultResultOrder('ipv4first');
+setDefaultAutoSelectFamilyAttemptTimeout(2000);
 
 export const TAG = '<!-- discussion-curator:v1 -->';
 export const SUMMARY = `${TAG}\n<!-- summary -->`;
