@@ -72,12 +72,14 @@ class FakeGitHub {
   async discussions() { return { meta: { id: 'repo', discussionCategories: { nodes: [{ id: 'general', name: 'General', isAnswerable: false }] } }, discussions: structuredClone(this.rows) }; }
   async create(repo, category, title, body) { const row = { id: title, number: this.rows.length + 1, body }; this.rows.push(row); return row; }
   async connection(id) { return structuredClone(this.comments.get(id) ?? []); }
-  async comment(discussion, body, existing) {
-    if (!this.comments.has(discussion)) this.comments.set(discussion, []);
-    if (existing) this.comments.get(discussion).find(c => c.id === existing).body = body;
-    else { existing = String(++this.created); this.comments.get(discussion).push({ id: existing, body, createdAt: '0' }); }
+  async comment(discussion, body, existing, replyToId) {
+    const destination = replyToId || discussion;
+    if (!this.comments.has(destination)) this.comments.set(destination, []);
+    if (existing) [...this.comments.values()].flat().find(c => c.id === existing).body = body;
+    else { existing = String(++this.created); this.comments.get(destination).push({ id: existing, body, createdAt: '0' }); }
     return existing;
   }
+  async deleteComment(id) { for (const [key, rows] of this.comments) this.comments.set(key, rows.filter(c => c.id !== id)); }
   async doc(key, body) { this.docs.set(key, body); }
 }
 const fixture = () => ({ gh: new FakeGitHub(), env: { LLM_API_KEY: 'test', LLM_MODEL: 'model' },
@@ -97,11 +99,47 @@ test('reconcile summarizes once, syncs bytes, reuses replies on edit and removes
 });
 test('normal speech does not receive an ask reply without command; critical errors may be corrected', async () => {
   const options = fixture(); options.event.discussion.body = 'ordinary comment';
+  options.gh.rows[0].body = 'ordinary comment';
   options.llm = async () => ({ summary: 'summary', reply: { reason: 'ask', body: 'should not send' } });
   await main(options); assert.equal(options.gh.comments.get('human'), undefined);
   options.gh.rows[0].body = 'major error';
   options.llm = async () => ({ summary: 'summary', reply: { reason: 'critical_error', body: 'correction with evidence' } });
   await main(options); assert.match(options.gh.comments.get('human')[0].body, /correction/);
+});
+test('current vague ask is explicit, replies in its thread, and edits reuse the same reply', async () => {
+  const options = fixture();
+  options.gh.comments.set('human', [{ id: 'ask', body: '/ask 回复我', createdAt: '1', author: { login: 'alice' } }]);
+  options.event.comment = { node_id: 'ask', body: '/ask 回复我' };
+  options.llm = async msg => {
+    const input = JSON.parse(msg.at(-1).content);
+    assert.equal(input.trigger.body, '/ask 回复我');
+    assert.equal(input.trigger.explicit_ask, true);
+    return { summary: 'summary', reply: null };
+  };
+  await main(options);
+  assert.equal(options.gh.comments.get('ask').length, 1);
+  assert.match(options.gh.comments.get('ask')[0].body, /请告诉我具体/);
+  const replyId = options.gh.comments.get('ask')[0].id;
+  options.gh.comments.get('human')[0].body = '/ask 新问题';
+  options.llm = async msg => {
+    assert.equal(JSON.parse(msg.at(-1).content).trigger.body, '/ask 新问题');
+    return { summary: 'updated', reply: { reason: 'ask', body: 'answer to new question' } };
+  };
+  await main(options);
+  assert.equal(options.gh.comments.get('ask').length, 1);
+  assert.equal(options.gh.comments.get('ask')[0].id, replyId);
+});
+test('an ask still receives its own answer when a schedule already summarized it', async () => {
+  const options = fixture();
+  options.gh.comments.set('human', [{ id: 'ask', body: '/ask current question', createdAt: '1', author: { login: 'alice' } }]);
+  const original = options.event;
+  options.event = {};
+  options.llm = async () => ({ summary: 'summary', reply: null });
+  await main(options);
+  options.event = { ...original, comment: { node_id: 'ask', body: '/ask current question' } };
+  options.llm = async () => ({ summary: 'summary', reply: { reason: 'ask', body: 'current answer' } });
+  await main(options);
+  assert.match(options.gh.comments.get('ask')[0].body, /current answer/);
 });
 test('trusted context is sorted, introduction is omitted and model cannot write context', async () => {
   const options = fixture();
@@ -123,7 +161,7 @@ test('failed doc write is retried by editing existing summary instead of duplica
   options.llm = async () => ({ summary: 'summary', reply: null });
   await assert.rejects(main(options), /temporary/);
   fail = false; await main(options);
-  assert.equal(options.gh.created, 1);
+  assert.equal(options.gh.created, 2); // one summary and one explicit-ask acknowledgement, both reused
   assert.equal(options.gh.docs.size, 1);
 });
 test('uneditable pending summary fails before consuming another LLM call', async () => {
@@ -155,4 +193,18 @@ test('App generated events stop before reads or model calls', async () => {
   options.gh.discussions = async () => assert.fail('Must not fetch bot-triggered events');
   options.llm = async () => assert.fail('Must not summarize App events');
   await main(options);
+});
+test('legacy misplaced answer is replaced once with a reply beneath the source comment', async () => {
+  const options = fixture();
+  options.gh.comments.set('human', [
+    { id: 'ask', body: '/ask 回复我', createdAt: '1', author: { login: 'alice' } },
+    { id: 'legacy', body: `${TAG}\n<!-- reply:ask -->\n\nold answer`, createdAt: '2', author: { login: 'app', __typename: 'Bot' } },
+  ]);
+  options.event.comment = { node_id: 'ask', body: '/ask 回复我' };
+  options.llm = async () => ({ summary: 'summary', reply: { reason: 'ask', body: '我在，请告诉我具体想问什么。' } });
+  await main(options);
+  assert.equal(options.gh.comments.get('human').length, 1);
+  assert.equal(options.gh.comments.get('ask').length, 1);
+  await main(options);
+  assert.equal(options.gh.comments.get('ask').length, 1);
 });

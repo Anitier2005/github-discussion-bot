@@ -93,13 +93,16 @@ export class GitHub {
     });
     return data.createDiscussion.discussion;
   }
-  async comment(discussionId, body, existing) {
+  async comment(discussionId, body, existing, replyToId) {
     if (existing) {
       await this.gql('mutation($input:UpdateDiscussionCommentInput!){updateDiscussionComment(input:$input){comment{id}}}', { input: { commentId: existing, body } });
       return existing;
     }
-    const data = await this.gql('mutation($input:AddDiscussionCommentInput!){addDiscussionComment(input:$input){comment{id}}}', { input: { discussionId, body } });
+    const data = await this.gql('mutation($input:AddDiscussionCommentInput!){addDiscussionComment(input:$input){comment{id}}}', { input: { discussionId, body, ...(replyToId ? { replyToId } : {}) } });
     return data.addDiscussionComment.comment.id;
+  }
+  async deleteComment(id) {
+    await this.gql('mutation($input:DeleteDiscussionCommentInput!){deleteDiscussionComment(input:$input){clientMutationId}}', { input: { id } });
   }
   async doc(key, body) {
     const url = `https://api.github.com/repos/${this.repo}/contents/doc/discussions/${key}.md`;
@@ -191,14 +194,19 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
   const context = (await gh.connection(roots.context.id, 'comments')).sort(byCreated);
   const existing = await gh.connection(roots.summary.id, 'comments');
   const groups = new Map(meta.discussionCategories.nodes.map(c => [c.id, []]));
+  const threads = new Map();
   for (const discussion of discussions) {
     if (ownIds.has(discussion.id) || excluded(discussion, blocked) || blocked.discussions.includes(discussion.number) || blocked.categories.includes(discussion.category.name)) continue;
     const clean = [];
+    const all = [];
     for (const comment of await gh.connection(discussion.id, 'comments')) {
-      clean.push(...(await gh.connection(comment.id, 'replies')).filter(r => !excluded(r, blocked)));
+      const replies = (await gh.connection(comment.id, 'replies')).map(r => ({ ...r, parentId: comment.id }));
+      all.push(comment, ...replies);
+      clean.push(...replies.filter(r => !excluded(r, blocked)));
       if (!excluded(comment, blocked)) clean.push(comment);
     }
     discussion.comments = clean.sort(byCreated);
+    threads.set(discussion.id, all);
     if (!groups.has(discussion.category.id)) groups.set(discussion.category.id, []);
     groups.get(discussion.category.id).push(discussion);
   }
@@ -214,24 +222,39 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const source = { discussions: items };
     const fingerprint = hash(stable([messages(prompt, rules, context, source), env.LLM_MODEL, env.LLM_BASE_URL]));
     const stamp = `<!-- input:${fingerprint} -->`;
-    if (previous?.body.includes(stamp)) { await gh.doc(key, previous.body); continue; }
+    const current = items.find(d => d.number === target.number);
+    const currentComment = current?.comments.find(c => c.id === event.comment?.node_id);
+    const trigger = { discussion: target.number ?? null, comment: event.comment?.node_id ?? null,
+      body: (event.comment ? currentComment?.body : current?.body) ?? '',
+      active: Boolean(current && (!event.comment || currentComment) && event.action !== 'deleted') };
+    const explicit = trigger.active && /^\s*\/ask\b/m.test(trigger.body);
+    const origin = trigger.comment || target.node_id;
+    const replyPrefix = `${TAG}\n<!-- reply:${origin} -->`;
+    const old = (threads.get(current?.id) ?? []).find(c => c.body.startsWith(replyPrefix));
+    const requestStamp = `<!-- request:${hash(stable([prompt, rules, context, current?.id, trigger.body, origin]))} -->`;
+    const summaryUnchanged = previous?.body.includes(stamp);
+    if (summaryUnchanged && (!explicit || old?.body.includes(requestStamp))) { await gh.doc(key, previous.body); continue; }
     if (previous?.viewerCanUpdate === false) {
       throw new Error('GitHub App cannot edit the summary comment. Check its installation, Discussions read/write permission and comment ownership. No LLM request was sent for this section.');
     }
-    const trigger = { discussion: target.number ?? null, comment: event.comment?.node_id ?? null,
-      body: (event.comment ?? target).body ?? '', active: items.some(d => d.number === target.number) };
+    trigger.explicit_ask = Boolean(explicit);
+    trigger.reply_scope = 'Answer only trigger.body. Historical asks are background, not the current question. A short request to reply should receive an acknowledgement and a request for specifics, not an answer to old questions.';
+    trigger.thread = currentComment ? (threads.get(current.id) ?? []).filter(c => c.id === (currentComment.parentId || currentComment.id) || c.parentId === (currentComment.parentId || currentComment.id)) : [];
     source.trigger = trigger;
     const result = validateResult(items.length ? await llm(messages(prompt, rules, context, source)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
+    if (explicit && !result.reply) result.reply = { reason: 'ask', body: '收到你的 /ask。请告诉我具体想问的问题，我会针对这条消息回答。' };
     const pending = `${prefix}\n${stamp.replace('input:', 'pending:')}\n\n${result.summary}`;
     const savedId = await gh.comment(roots.summary.id, pending, previous?.id);
     if (trigger.active) {
-      const origin = trigger.comment || target.node_id;
-      const replyPrefix = `${TAG}\n<!-- reply:${origin} -->`;
-      const current = items.find(d => d.number === target.number);
-      const old = (await gh.connection(current.id, 'comments')).find(c => c.body.startsWith(replyPrefix));
       const reply = result.reply;
-      const allowed = reply && (reply.reason === 'critical_error' || /^\s*\/ask\b/m.test(trigger.body));
-      if (allowed) await gh.comment(current.id, `${replyPrefix}\n\n${reply.body}`, old?.id);
+      const allowed = reply && (reply.reason === 'critical_error' || explicit);
+      const replyToId = currentComment ? (currentComment.parentId || currentComment.id) : undefined;
+      if (allowed) {
+        // GitHub cannot move a legacy top-level comment into a thread; replace it once.
+        const relocate = old && replyToId && !old.parentId;
+        await gh.comment(current.id, `${replyPrefix}\n${requestStamp}\n\n${reply.body}`, relocate ? undefined : old?.id, replyToId);
+        if (relocate) await gh.deleteComment(old.id);
+      }
       else if (old) await gh.comment(current.id, `${replyPrefix}\n\n原发言已更新，先前的自动回复已撤回。`, old.id);
     }
     const body = `${prefix}\n${stamp}\n\n${result.summary}`;
