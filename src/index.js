@@ -22,7 +22,7 @@ import { resolve } from 'node:path';
 import { setDefaultResultOrder } from 'node:dns';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { prepareMedia } from './media.js';
-import { proposalFormat, proposalInstructions, hasProposalTable, renderProposals } from './proposals.js';
+import { proposalFormat, proposalInstructions, proposalReviewInstructions, hasProposalTable, renderProposals } from './proposals.js';
 
 // Hosted runners can have slow cross-region IPv4 handshakes and unusable IPv6.
 setDefaultResultOrder('ipv4first');
@@ -305,8 +305,13 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const outputRules = proposalTableRequired ? `${rules}\n\n${proposalInstructions}` : rules;
     // Historical summaries can repeat stale decisions. Retain the current thread on replies.
     const inputContext = proposalTableRequired && !trigger.active ? [] : context;
-    const result = validateResult(items.length ? await llm(messages(prompt, outputRules, inputContext, source, media.parts)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
+    let result = validateResult(items.length ? await llm(messages(prompt, outputRules, inputContext, source, media.parts)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
     if (proposalTableRequired && items.length) {
+      if (result.proposals?.length) {
+        const reviewed = validateResult(await llm(messages(prompt, `${outputRules}\n\n${proposalReviewInstructions}`, [],
+          { discussions: items, draft: result }, media.parts)));
+        result = { ...reviewed, reply: result.reply };
+      }
       result.summary = renderProposals(result, items);
       validateResult(result);
     }

@@ -105,7 +105,7 @@ test('proposal summaries rebuild matching legacy cache and publish source-backed
   assert.match(comment.body, /\[#1\]\(https:\/\/example.test\/1\)/);
   assert.equal(comment.body, [...options.gh.docs.values()][0]);
   await main(options);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 
   // Keep the matching input stamp to exercise the cache path.
   comment.body = comment.body.split('\n\n')[0] + '\n\n### 决定与共识\n\n旧版总结';
@@ -117,7 +117,7 @@ test('proposal summaries rebuild matching legacy cache and publish source-backed
   assert.equal([...options.gh.docs.values()][0], previousDoc);
   options.llm = validLlm;
   await main(options);
-  assert.equal(calls, 2);
+  assert.equal(calls, 4);
   assert.equal(comment.body, previousDoc);
 });
 test('reconcile summarizes once, syncs bytes, reuses replies on edit and removes deleted sources', async () => {
