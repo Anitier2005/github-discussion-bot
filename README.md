@@ -13,6 +13,7 @@
 | 类型 | 名称 | 内容 |
 |---|---|---|
 | Secret | LLM_API_KEY | 模型 API 密钥 |
+| Secret | BOT_GITHUB_TOKEN | 可选；默认 GITHUB_TOKEN 无法编辑总结时，填写只授权目标仓库的 fine-grained PAT，授予 Discussions/Contents 读写 |
 | Variable | LLM_MODEL | 支持 JSON object 输出的模型名，必填 |
 | Variable | LLM_BASE_URL | OpenAI 兼容接口根地址，默认 https://api.openai.com/v1 |
 | Variable | BOT_CATEGORY | 汇总和上下文帖的分类名，建议 General |
@@ -29,7 +30,7 @@
 
 仅本次发言独立一行以 `/ask` 开头，或模型按规范识别重大事实错误时才回复人类。其余事件只维护总结。回复以源帖/评论 ID 为键更新，不追加重复回复。默认回复到原 Discussion 的一级评论，正文可引用原发言。小时级对账和手工运行用于修复事件遗漏；它们不会主动回复历史发言。
 
-使用 `GITHUB_TOKEN` 的 contents/discussions write，不需要个人 PAT。GitHub 用该 token 生成的写入通常不会再次启动 workflow，代码还按 bot 身份、标记及专用帖 ID 排除循环。全仓库串行，不取消正在运行的工作；Actions 可能合并尚待执行事件，小时级全量对账确保总结最终一致，但极端密集事件下不能保证每个历史 `/ask` 都得到回应。
+默认使用 `GITHUB_TOKEN` 的 contents/discussions write。若 GitHub 拒绝编辑评论，设置 `BOT_GITHUB_TOKEN` Secret 覆盖，权限与创建方法见详细指南。PAT 写入可能触发新事件，代码按标记及专用帖 ID 排除循环。全仓库串行，不取消正在运行的工作；Actions 可能合并尚待执行事件，小时级全量对账确保总结最终一致，但极端密集事件下不能保证每个历史 `/ask` 都得到回应。
 
 ## 运行与限制
 

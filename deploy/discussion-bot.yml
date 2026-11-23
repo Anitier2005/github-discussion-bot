@@ -29,7 +29,7 @@ jobs:
       # Replace REPLACE_WITH_COMMIT_SHA with the published personal repository commit.
       - uses: Anitier2005/github-discussion-bot@REPLACE_WITH_COMMIT_SHA
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN || github.token }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ vars.LLM_BASE_URL || 'https://api.openai.com/v1' }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}

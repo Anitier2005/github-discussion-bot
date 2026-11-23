@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 export const TAG = '<!-- discussion-curator:v1 -->';
 export const SUMMARY = `${TAG}\n<!-- summary -->`;
 export const CONTEXT = `${TAG}\n<!-- context -->`;
-const fields = 'id body createdAt author{login}';
+const fields = 'id body createdAt author{login} viewerCanUpdate';
 export const hash = text => createHash('sha256').update(text).digest('hex');
 export function stable(value) {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -203,6 +203,9 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const fingerprint = hash(stable([messages(prompt, rules, context, source), env.LLM_MODEL, env.LLM_BASE_URL]));
     const stamp = `<!-- input:${fingerprint} -->`;
     if (previous?.body.includes(stamp)) { await gh.doc(key, previous.body); continue; }
+    if (previous?.viewerCanUpdate === false) {
+      throw new Error('GitHub token cannot edit the summary comment. Configure BOT_GITHUB_TOKEN with Discussions and Contents read/write for this repository. No LLM request was sent for this section.');
+    }
     const trigger = { discussion: target.number ?? null, comment: event.comment?.node_id ?? null,
       body: (event.comment ?? target).body ?? '', active: items.some(d => d.number === target.number) };
     source.trigger = trigger;

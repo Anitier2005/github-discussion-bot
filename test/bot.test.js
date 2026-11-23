@@ -125,3 +125,11 @@ test('failed doc write is retried by editing existing summary instead of duplica
   assert.equal(options.gh.created, 1);
   assert.equal(options.gh.docs.size, 1);
 });
+test('uneditable pending summary fails before consuming another LLM call', async () => {
+  const options = fixture();
+  options.gh.rows.push({ id: 'summary', number: 2, body: SUMMARY });
+  const { hash } = await import('../src/index.js');
+  options.gh.comments.set('summary', [{ id: 'existing', body: `${TAG}\n<!-- category:${hash('general').slice(0, 16)} -->\n<!-- pending:old -->`, viewerCanUpdate: false }]);
+  options.llm = async () => { assert.fail('LLM should not be called when editing is forbidden'); };
+  await assert.rejects(main(options), /Configure BOT_GITHUB_TOKEN/);
+});

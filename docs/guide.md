@@ -11,6 +11,7 @@
 | 标签页 | 名称 | 内容 |
 | --- | --- | --- |
 | Secrets | `LLM_API_KEY` | 必填，模型服务密钥 |
+| Secrets | `BOT_GITHUB_TOKEN` | 默认 GITHUB_TOKEN 无法编辑总结时需要；fine-grained PAT，只授权目标仓库，Discussions/Contents 读写 |
 | Variables | `LLM_MODEL` | 必填，服务商实际支持的模型 ID |
 | Variables | `LLM_BASE_URL` | 默认 `https://api.openai.com/v1`，必须 HTTPS |
 | Variables | `BOT_SYSTEM_PROMPT` | 系统提示词全文；空值回退到独立 MD |
@@ -24,6 +25,16 @@
 填接口根地址，例如 `https://provider.example/v1`，脚本追加 `/chat/completions`。不要填已带 `/chat/completions` 的地址。
 
 服务商需支持 Chat Completions、system 消息和 `response_format: {"type":"json_object"}`。只支持其他协议的服务不能直接使用。模型窗口需要容纳一个完整板块，脚本不静默截断，也不指定 temperature。
+
+火山方舟根地址示例：`https://ark.cn-beijing.volces.com/api/v3`。不要加 `/responses` 或 `/chat/completions`，脚本使用 Chat Completions 协议。
+
+### GitHub 编辑权限失败时
+
+真实验收发现，本测试仓库的默认 GITHUB_TOKEN 可以创建评论，但 `viewerCanUpdate=false`，编辑会返回 `FORBIDDEN Resource not accessible by integration`；增加 issues write 也未解决。因此提供可选的 `BOT_GITHUB_TOKEN`，优先于默认 token。已有总结不能编辑时，脚本在调用 LLM 前报错，避免继续消耗模型额度。
+
+创建方式：GitHub 个人头像 → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token。Resource owner 选目标组织 `bot-test-org-bot`，Repository access 选 Only select repositories，勾选 `test`。Repository permissions 仅设置 Contents: Read and write、Discussions: Read and write；Metadata read 自动授予。设置合适的有效期，创建后将值保存在目标仓库 Actions 的 `BOT_GITHUB_TOKEN` Secret，勿发到聊天或提交到仓库。若组织要求审批，需先批准此 token。无法选择组织时，请检查组织对 fine-grained PAT 的策略或使用获授权的 GitHub App。
+
+PAT 写入的身份是所属用户，生成内容仍通过机器标记与专用帖 ID 排除，防止自总结。PAT 不应授予其他仓库或 workflow 管理权限。token 到期后需更新同名 Secret。
 
 ### 黑名单
 
@@ -116,7 +127,7 @@ user: 当前板块有效讨论 + 当前事件
 6. Actions → Discussion bot → Run workflow；选 init_only 只创建专用帖，不调用模型。
 7. 发一个普通问题，检查总结与 doc；发 `/ask` 检查回复；编辑原文确认更新原评论。
 
-工作流必须在默认分支，仓库需允许 Actions 和外部 Action。使用 `GITHUB_TOKEN` 的 contents/discussions write，不需要个人 PAT。默认分支保护若禁止直接写入，需要配置允许的写入策略；当前不使用 PR 提交 doc。
+工作流必须在默认分支，仓库需允许 Actions 和外部 Action。默认使用 `GITHUB_TOKEN` 的 contents/discussions write；若编辑权限被拒绝，按上文设置 BOT_GITHUB_TOKEN。默认分支保护若禁止直接写入，需要配置允许的写入策略；当前不使用 PR 提交 doc。
 
 GitHub 使用该 token 写入通常不会再次启动工作流，代码还按身份、标记、专用帖 ID 防循环。仓库内串行，cancel-in-progress=false。GitHub 可能替换仍在等待的事件，定时全量对账让总结最终收敛；极高事件频率下不能保证所有历史 `/ask` 都被回复。
 
