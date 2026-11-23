@@ -195,7 +195,13 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const matches = discussions.filter(d => d.body.startsWith(marker) && (!appLogin ||
       d.author?.login.replace(/\[bot\]$/, '').toLowerCase() === appLogin));
     if (matches.length > 1) throw new Error(`Duplicate ${kind} discussions; resolve before continuing`);
-    if (matches.length) roots[kind] = matches[0];
+    if (matches.length) {
+      roots[kind] = matches[0];
+      if (kind === 'context' && matches[0].body.includes('管理员在下面追加')) {
+        await gh.gql('mutation($input:UpdateDiscussionInput!){updateDiscussion(input:$input){discussion{id}}}', { input: { discussionId: matches[0].id,
+          body: `${CONTEXT}\n\n仓库隔离的追加式上下文。主帖不进入模型输入。脚本仅接纳当前 App 写入且未被其他身份编辑的结构化记录，保留 user/assistant 角色；不读取人类或其他 App 评论。模型不能直接改写本帖。` } });
+      }
+    }
     else {
       const categories = meta.discussionCategories.nodes;
       const category = env.BOT_CATEGORY ? categories.find(c => c.name === env.BOT_CATEGORY) : categories.find(c => !c.isAnswerable);
