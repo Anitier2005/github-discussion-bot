@@ -1,6 +1,8 @@
 # Discussion curator
 
-Python 3.12 标准库实现的可复用 composite Action。实现代码放在个人仓库，目标组织仓库只保存 workflow、项目规范与生成的 doc。
+原生 JavaScript GitHub Action，运行于 Node.js 24，使用内置 fetch，无第三方运行时依赖，无需安装或打包。实现代码放在个人仓库，目标组织仓库只保存 workflow、项目规范与生成的 doc。
+
+完整安装、配置示例、提示词与缓存机制、回复规则和排错说明见 **[详细使用指南](docs/guide.md)**。
 
 ## 配置
 
@@ -31,6 +33,6 @@ Settings → Secrets and variables → Actions：
 
 ## 运行与限制
 
-Actions → Discussion bot → Run workflow；选 init_only 只建立两个帖，不消耗 LLM。配好 API 后在普通板块创建测试帖，编辑原文、发 `/ask` 并检查 doc 与汇总评论。`python -m unittest discover -s tests -v` 执行本地测试。
+Actions → Discussion bot → Run workflow；选 init_only 只建立两个帖，不消耗 LLM。配好 API 后在普通板块创建测试帖，编辑原文、发 `/ask` 并检查 doc 与汇总评论。`npm test` 或 `node --test` 执行本地测试。
 
 模型一次处理一个板块全部当前内容；为保留语义和稳定前缀不静默截断。大型仓库需选足够上下文窗口和 GitHub 单次请求额度；超限会失败并可重跑。模型没有联网验证能力，纠错可靠性受上下文证据限制。GitHub 评论和文件提交不是跨资源事务，失败时可能短暂不同步，重跑会修复。正文校验限制 55000 字符。不要在可信上下文或项目规范中放秘密。目标分支若保护禁止直接写入，需为机器人配置允许的写入策略或后续扩展 PR 模式。
