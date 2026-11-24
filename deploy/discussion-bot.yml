@@ -56,6 +56,7 @@ jobs:
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           LLM_TIMEOUT_SECONDS: ${{ vars.LLM_TIMEOUT_SECONDS || '300' }}
           LLM_MAX_ATTEMPTS: ${{ vars.LLM_MAX_ATTEMPTS || '3' }}
+          LLM_JSON_MODE: ${{ vars.LLM_JSON_MODE || 'true' }}
           BOT_BATCH_THREADS: ${{ vars.BOT_BATCH_THREADS || '3' }}
           BOT_BLACKLIST: ${{ vars.BOT_BLACKLIST || '{}' }}
           BOT_MEDIA_HOSTS: ${{ vars.BOT_MEDIA_HOSTS }}

@@ -354,6 +354,7 @@ export async function generate(msg, env = process.env, transport = request, wait
   const payload = {
     model: env.LLM_MODEL, messages: msg, response_format: { type: 'json_object' }, stream: false,
   };
+  if (env.LLM_JSON_MODE === 'false') delete payload.response_format;
   let response;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -385,7 +386,10 @@ export async function generate(msg, env = process.env, transport = request, wait
     const code = /^\d{1,8}$/.test(candidateCode ?? '') ? String(candidateCode) : 'none';
     const expectedFields = ['choices', 'error', 'code', 'msg', 'message', 'data', 'usage', 'status', 'success', 'object'];
     const fields = expectedFields.filter(key => Object.hasOwn(response ?? {}, key));
-    console.log(`Model response metadata: fields=${fields.join(',') || 'none'} choices=${Array.isArray(response?.choices) ? response.choices.length : 'missing'} content=${typeof content} content_length=${typeof content === 'string' ? content.length : 0} error_code=${code}`);
+    const providerMessage = typeof response?.error?.message === 'string' ? response.error.message : '';
+    const reason = /model.*(?:not found|not exist|unavailable)|模型.*(?:不存在|不可用|下线)/i.test(providerMessage) ? 'model_unavailable'
+      : /quota|balance|额度|余额/i.test(providerMessage) ? 'quota' : /response.format|json.mode/i.test(providerMessage) ? 'json_format' : 'unspecified';
+    console.log(`Model response metadata: fields=${fields.join(',') || 'none'} choices=${Array.isArray(response?.choices) ? response.choices.length : 'missing'} content=${typeof content} content_length=${typeof content === 'string' ? content.length : 0} error_code=${code} reason=${reason}`);
   }
   if (typeof content !== 'string' || !content.trim()) {
     const finish = /^[a-z_]+$/.test(choice?.finish_reason ?? '') ? choice.finish_reason : 'unknown';
@@ -400,7 +404,15 @@ export async function generate(msg, env = process.env, transport = request, wait
 export async function main({ env = process.env, gh = new GitHub(env), event, llm, rules, prompt, mediaLoader } = {}) {
   if (env.BOT_MODEL_PROBE === 'true') {
     if (!env.LLM_API_KEY || !env.LLM_MODEL) throw new Error('Configure the model and API key before running the probe');
-    await generate([{ role: 'user', content: 'Return exactly this JSON object: {"summary":"ok","reply":null}' }], env);
+    const probe = [{ role: 'user', content: 'Return exactly this JSON object: {"summary":"ok","reply":null}' }];
+    try {
+      await generate(probe, env);
+    } catch (error) {
+      if (env.LLM_JSON_MODE === 'false' || !/^Model returned no text/.test(error.message)) throw error;
+      console.log('Retrying synthetic probe without the response_format parameter.');
+      await generate(probe, { ...env, LLM_JSON_MODE: 'false' });
+      console.log('Model probe passed with LLM_JSON_MODE=false.');
+    }
     console.log('Model probe returned valid summary JSON.');
     return;
   }
