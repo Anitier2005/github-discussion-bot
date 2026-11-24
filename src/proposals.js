@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Anitier2005
 
-export const proposalFormat = 'proposal-status:v5';
+export const proposalFormat = 'proposal-status:v6';
 const statuses = new Set(['已确认', '提出待讨论', '讨论待确认', '已否决', '已放弃']);
 const marker = '<!-- proposal-table -->';
 const header = '| 议题 | 方案 | 状态 | 提出者 | 判定依据 | 来源 |';
@@ -26,9 +26,10 @@ export const proposalReviewInstructions = `
 `.trim();
 
 const normalize = s => s.replace(/\s+/g, ' ').trim();
+export const plainMentions = text => text.replace(/(?<![\w@/])@(?=[A-Za-z0-9])/g, '');
 function cell(value) {
   if (typeof value !== 'string' || !value.trim()) throw new Error('Proposal requires nonempty text fields');
-  return normalize(value).replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;')
+  return plainMentions(normalize(value)).replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;')
     .replace(/\|/g, '&#124;').replace(/@/g, '&#64;');
 }
 
@@ -62,7 +63,7 @@ export function renderProposals(result, discussions) {
       const source = sources.get(id);
       if (!source) throw new Error('Proposal proposer must reference a current discussion message');
       const login = source.message.author?.login;
-      return login && /^[A-Za-z0-9-]+$/.test(login) ? '@' + login : '未知';
+      return login && /^[A-Za-z0-9-]+$/.test(login) ? login : '未知';
     });
     const links = [...new Set([evidence, ...proposal.proposer_ids.map(id => sources.get(id))]
       .map(({ discussion }) => `[#${discussion.number}](${discussion.url})`))];

@@ -23,7 +23,7 @@ import { setDefaultResultOrder } from 'node:dns';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { prepareMedia } from './media.js';
-import { proposalFormat, proposalInstructions, proposalReviewInstructions, hasProposalTable, renderProposals } from './proposals.js';
+import { proposalFormat, proposalInstructions, proposalReviewInstructions, hasProposalTable, plainMentions, renderProposals } from './proposals.js';
 
 // Hosted runners can have slow cross-region IPv4 handshakes and unusable IPv6.
 setDefaultResultOrder('ipv4first');
@@ -301,7 +301,7 @@ async function summarizeBatches({ batches, items, category, env, gh, root, rows,
     }
     consecutiveFailures = 0;
     const draft = { summary: result.summary, proposals: result.proposals, reply: null };
-    const checkpoint = prefix + JSON.stringify(draft);
+    const checkpoint = prefix + JSON.stringify(draft).replaceAll('@', '\\u0040');
     if (env.BOT_APP_LOGIN && checkpoint.length <= 60000) await gh.comment(root, checkpoint);
     drafts.push(draft);
     console.log(`Summary batch=${key.slice(0, 12)} completed in ${Date.now() - started} ms`);
@@ -330,7 +330,7 @@ export function readContext(rows, repo, appLogin) {
 }
 export async function appendContext(gh, root, existing, record, appLogin) {
   if (!appLogin || !record.repo || existing.some(c => c.recordId === record.id)) return;
-  const body = JOURNAL + stable(record);
+  const body = JOURNAL + stable(record).replaceAll('@', '\\u0040');
   if (body.length > 60000) throw new Error('Context record exceeds GitHub comment limit');
   await gh.comment(root, body);
 }
@@ -512,6 +512,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
       validateResult(result);
     }
     if (explicit && !result.reply) result.reply = { reason: 'ask', body: '收到你的 /ask。请告诉我具体想问的问题，我会针对这条消息回答。' };
+    result.summary = plainMentions(result.summary);
     const pending = `${prefix}\n${stamp.replace('input:', 'pending:')}\n\n${result.summary}`;
     const savedId = await gh.comment(roots.summary.id, pending, previous?.id);
     if (trigger.active) {
@@ -521,7 +522,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
       if (allowed) {
         // GitHub cannot move a legacy top-level comment into a thread; replace it once.
         const relocate = old && replyToId && !old.parentId;
-        await gh.comment(current.id, `${replyPrefix}\n${requestStamp}\n\n${reply.body}`, relocate ? undefined : old?.id, replyToId);
+        await gh.comment(current.id, `${replyPrefix}\n${requestStamp}\n\n${plainMentions(reply.body)}`, relocate ? undefined : old?.id, replyToId);
         if (relocate) await gh.deleteComment(old.id);
       }
       else if (old) await gh.comment(current.id, `${replyPrefix}\n\n原发言已更新，先前的自动回复已撤回。`, old.id);

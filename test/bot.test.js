@@ -150,12 +150,14 @@ test('proposal summaries rebuild matching legacy cache and publish source-backed
   let calls = 0;
   options.llm = async () => {
     calls++;
-    return { summary: '## 测试\n\n<!-- proposal-table -->', proposals: [proposal], reply: null };
+    return { summary: '## 测试\n\n由 @alice 提出。\n\n<!-- proposal-table -->', proposals: [proposal], reply: null };
   };
   await main(options);
   const root = options.gh.rows.find(d => d.body.startsWith(SUMMARY));
   const comment = options.gh.comments.get(root.id)[0];
-  assert.match(comment.body, /粗粒度锁 \| 已放弃 \| @alice/);
+  assert.match(comment.body, /粗粒度锁 \| 已放弃 \| alice/);
+  assert.match(comment.body, /由 alice 提出/);
+  assert.doesNotMatch(comment.body, /@alice/);
   assert.match(comment.body, /\[#1\]\(https:\/\/example.test\/1\)/);
   assert.equal(comment.body, [...options.gh.docs.values()][0]);
   await main(options);
