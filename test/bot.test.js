@@ -185,11 +185,13 @@ test('batch summaries repair missing proposal data and insert missing table mark
     const source = JSON.parse(msg.at(-1).content);
     if (source.validation_error) repairs++;
     if (source.discussions?.[0].id === 'human' && !source.validation_error) return { summary: 'missing proposals' };
-    return { summary: 'draft without marker', proposals: [] };
+    return { summary: 'draft\n### 方案状态\n| 议题 | 方案 | 状态 |\n| --- | --- | --- |\n| fabricated row | x | y |\n<!-- proposal-table -->\n<!-- proposal-table -->', proposals: [] };
   };
   await main(options);
   assert.equal(repairs, 1);
-  assert.match([...options.gh.docs.values()][0], /### 方案状态/);
+  const doc = [...options.gh.docs.values()][0];
+  assert.equal(doc.match(/### 方案状态/g).length, 1);
+  assert.doesNotMatch(doc, /fabricated row/);
 });
 test('reconcile summarizes once, syncs bytes, reuses replies on edit and removes deleted sources', async () => {
   const options = fixture(); let calls = 0;

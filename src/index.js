@@ -242,9 +242,12 @@ export function summaryBatches(items, maxThreads = 3) {
 async function validateProposalDraft(result, discussions, revise) {
   function normalize(draft) {
     const marker = '<!-- proposal-table -->';
-    if (Array.isArray(draft.proposals) && !draft.summary.includes(marker)) {
-      draft = { ...draft, summary: `${draft.summary.trimEnd()}\n\n${marker}` };
-    }
+    if (!Array.isArray(draft.proposals)) throw new Error('Model response is missing the proposals array');
+    const prose = draft.summary
+      .replace(/^#{2,6}[ \t]+(?:决定与共识|方案状态)[ \t]*$/gm, '')
+      .replace(/^\|[^\n]*议题[^\n]*方案[^\n]*状态[^\n]*\|[^\S\n]*\n(?:[ \t]*\|[^\n]*\n?)*/gm, '')
+      .replaceAll(marker, '').trim();
+    draft = { ...draft, summary: prose ? `${prose}\n\n${marker}` : marker };
     renderProposals(draft, discussions);
     return draft;
   }
@@ -252,7 +255,13 @@ async function validateProposalDraft(result, discussions, revise) {
     return normalize(result);
   } catch (error) {
     console.warn(`Repairing proposal output: ${error.message}`);
-    return normalize(validateResult(await revise(result, error.message)));
+    const revised = validateResult(await revise(result, error.message));
+    try {
+      return normalize(revised);
+    } catch (validationError) {
+      validationError.deferBatch = true;
+      throw validationError;
+    }
   }
 }
 
@@ -283,7 +292,7 @@ async function summarizeBatches({ batches, items, category, env, gh, root, rows,
           llm(messages(prompt, `${batchRules}\n${proposalReviewInstructions}`, [], { ...source, draft, validation_error }, media.parts)));
       }
     } catch (error) {
-      if (!isTransient(error) || error.status === 429 || error.deferRun || !env.BOT_APP_LOGIN) throw error;
+      if (!(isTransient(error) || error.deferBatch) || error.status === 429 || error.deferRun || !env.BOT_APP_LOGIN) throw error;
       const batchId = key.slice(0, 12);
       failures.push(batchId);
       console.warn(`Summary batch=${batchId} deferred after retries: ${error.message}`);
