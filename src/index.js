@@ -355,6 +355,8 @@ export async function generate(msg, env = process.env, transport = request, wait
     model: env.LLM_MODEL, messages: msg, response_format: { type: 'json_object' }, stream: false,
   };
   if (env.LLM_JSON_MODE === 'false') delete payload.response_format;
+  if (env.LLM_THINKING === 'disabled') payload.thinking = { type: 'disabled' };
+  if (env.BOT_MODEL_PROBE === 'true') payload.max_tokens = 64;
   let response;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {

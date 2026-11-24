@@ -48,6 +48,14 @@ test('model accepts fenced JSON and reports empty output without logging provide
   assert.equal((await generate([], {}, async () => response('```json\n{"summary":"done"}\n```'))).summary, 'done');
   await assert.rejects(generate([], {}, async () => response('')), /no text \(finish_reason=stop\)/);
 });
+test('synthetic probes cap tokens and support provider-specific thinking configuration', async () => {
+  await generate([], { BOT_MODEL_PROBE: 'true', LLM_THINKING: 'disabled', LLM_JSON_MODE: 'false' }, async (_url, _token, payload) => {
+    assert.equal(payload.max_tokens, 64);
+    assert.deepEqual(payload.thinking, { type: 'disabled' });
+    assert.equal(payload.response_format, undefined);
+    return { choices: [{ message: { content: '{"summary":"ok"}' } }] };
+  });
+});
 test('model retries gateway timeouts and honors provider backoff', async () => {
   const delays = [];
   const responses = [new Response(null, { status: 524, headers: { 'Retry-After': '120' } }), new Response(null, { status: 429, headers: { 'Retry-After': '8' } }),

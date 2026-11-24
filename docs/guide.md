@@ -15,6 +15,8 @@
 | Secrets | `BOT_APP_PRIVATE_KEY` | 必填，GitHub App 私钥 PEM 全文 |
 | Variables | `LLM_MODEL` | 必填，服务商实际支持的模型 ID |
 | Variables | `LLM_TIMEOUT_SECONDS` | 模型请求超时秒数，默认 300，允许 30–600 |
+| Variables | `LLM_THINKING` | 支持智谱 `thinking` 参数的模型可设为 `disabled`，留空时不发送此参数 |
+| Variables | `LLM_JSON_MODE` | 默认 `true`。模型接口不支持 `response_format` 时可设为 `false`，脚本仍校验模型输出的 JSON |
 | Variables | `LLM_MAX_ATTEMPTS` | 每次模型调用最多尝试几次（含首次），默认 3，允许 1–5 |
 | Variables | `BOT_BATCH_THREADS` | 每批最多包含几个讨论线程，默认 3，允许 1–10 |
 | Variables | `LLM_BASE_URL` | 默认 `https://api.openai.com/v1`，必须 HTTPS |
