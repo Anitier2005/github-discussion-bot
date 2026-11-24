@@ -173,10 +173,65 @@ export function messages(prompt, rules, context, source, media = []) {
     { role: 'user', content: media.length ? [{ type: 'text', text: stable(source) }, ...media] : stable(source) }];
 }
 const JOURNAL = `${TAG}\n<!-- context-record:v1 -->\n`;
+const BATCH = `${TAG}\n<!-- summary-batch:v1 -->\n`;
+
+function ownedByApp(appLogin) {
+  const login = appLogin?.replace(/\[bot\]$/, '').toLowerCase();
+  return actor => Boolean(login && actor?.__typename === 'Bot' && actor.login.replace(/\[bot\]$/, '').toLowerCase() === login);
+}
+
+export function summaryBatches(items, maxThreads = 3) {
+  const batches = [];
+  let batch = [], bytes = 0;
+  for (const item of items) {
+    const size = Buffer.byteLength(stable(item));
+    if (batch.length && (batch.length === maxThreads || bytes + size > 32000)) {
+      batches.push(batch);
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(item);
+    bytes += size;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+
+async function summarizeBatches({ batches, category, env, gh, root, rows, llm, prompt, rules, proposalTableRequired, mediaLoader }) {
+  const owned = ownedByApp(env.BOT_APP_LOGIN);
+  const drafts = [];
+  for (const batch of batches) {
+    const source = { discussions: batch };
+    const batchRules = `${rules}\n这是板块的一批讨论。提炼本批的待解疑问、共识和方案，保留原文链接和消息 ID。保持简洁，reply 为 null。`;
+    const key = hash(stable([BATCH, category, batch, prompt, batchRules, proposalFormat, env.GITHUB_REPOSITORY, env.LLM_BASE_URL, env.LLM_MODEL, env.BOT_MEDIA_HOSTS]));
+    const prefix = `${BATCH}${key}\n`;
+    const previous = rows.find(row => owned(row.author) && (!row.editor || owned(row.editor)) && row.body.startsWith(prefix));
+    if (previous) {
+      drafts.push(validateResult(JSON.parse(previous.body.slice(prefix.length))));
+      continue;
+    }
+    const started = Date.now();
+    console.log(`Summary category=${category} batch=${key.slice(0, 12)} threads=${batch.length} source_bytes=${Buffer.byteLength(stable(source))}`);
+    const media = await prepareMedia(batch, env, mediaLoader);
+    let result = validateResult(await llm(messages(prompt, batchRules, [], source, media.parts)));
+    if (proposalTableRequired) {
+      if (result.proposals?.length) result = validateResult(await llm(messages(prompt, `${batchRules}\n${proposalReviewInstructions}`, [], { ...source, draft: result }, media.parts)));
+      renderProposals(result, batch);
+    }
+    const draft = { summary: result.summary, proposals: result.proposals, reply: null };
+    const checkpoint = prefix + JSON.stringify(draft);
+    if (env.BOT_APP_LOGIN && checkpoint.length <= 60000) await gh.comment(root, checkpoint);
+    drafts.push(draft);
+    console.log(`Summary batch=${key.slice(0, 12)} completed in ${Date.now() - started} ms`);
+  }
+  const mergeRules = `${rules}\n你收到同一板块的所有批次摘要。合并重复项，保留各批次的疑问、共识、决定和原文链接，reply 为 null。方案的消息 ID 和原文引语必须来自批次草稿；只在已有证据支持时更新状态，不要编造新证据。`;
+  console.log(`Summary category=${category} merging ${drafts.length} batches`);
+  return validateResult(await llm(messages(prompt, mergeRules, [], { drafts })));
+}
+
 export function readContext(rows, repo, appLogin) {
   if (!repo || !appLogin) return [];
-  const login = appLogin.replace(/\[bot\]$/, '').toLowerCase();
-  const owned = actor => actor?.__typename === 'Bot' && actor.login.replace(/\[bot\]$/, '').toLowerCase() === login;
+  const owned = ownedByApp(appLogin);
   const records = [];
   for (const row of [...rows].sort(byCreated)) {
     if (!owned(row.author) || (row.editor && !owned(row.editor)) || !row.body.startsWith(JOURNAL)) continue;
@@ -269,7 +324,8 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     console.log('Configure LLM_API_KEY secret and LLM_MODEL variable to enable generation.');
     return;
   }
-  const context = readContext(await gh.connection(roots.context.id, 'comments'), env.GITHUB_REPOSITORY, env.BOT_APP_LOGIN);
+  const contextRows = await gh.connection(roots.context.id, 'comments');
+  const context = readContext(contextRows, env.GITHUB_REPOSITORY, env.BOT_APP_LOGIN);
   const existing = await gh.connection(roots.summary.id, 'comments');
   const groups = new Map(meta.discussionCategories.nodes.map(c => [c.id, []]));
   const threads = new Map();
@@ -291,6 +347,8 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
   prompt ??= await systemPrompt(env);
   rules ??= await readFile(env.BOT_RULES_PATH || '.github/discussion-bot/rules.md', 'utf8');
   const proposalTableRequired = rules.includes('议题、方案、状态、提出者、判定依据、来源');
+  const maxThreads = Number(env.BOT_BATCH_THREADS || 3);
+  if (!Number.isInteger(maxThreads) || maxThreads < 1 || maxThreads > 10) throw new Error('BOT_BATCH_THREADS must be an integer from 1 to 10');
   llm ??= msg => generate(msg, env);
   for (const [category, items] of [...groups].sort(([a], [b]) => compare(a, b))) {
     const key = hash(category).slice(0, 16);
@@ -298,7 +356,6 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const prefix = `${TAG}\n${marker}`;
     const previous = existing.find(c => c.body.startsWith(prefix));
     if (!items.length && !previous) continue;
-    const media = await prepareMedia(items, env, mediaLoader);
     const source = { discussions: items };
     // Appending history must not make unchanged discussions dirty on every scheduled run.
     const fingerprintInputs = [messages(prompt, rules, [], source), env.LLM_MODEL, env.LLM_BASE_URL];
@@ -337,9 +394,23 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const outputRules = proposalTableRequired ? `${rules}\n\n${proposalInstructions}` : rules;
     // Historical summaries can repeat stale decisions. Retain the current thread on replies.
     const inputContext = proposalTableRequired && !trigger.active ? [] : context;
-    let result = validateResult(items.length ? await llm(messages(prompt, outputRules, inputContext, source, media.parts)) : { summary: '本板块当前没有可总结的有效讨论。', reply: null });
+    const batches = summaryBatches(items, maxThreads);
+    const batched = batches.length > 1;
+    const media = await prepareMedia(batched ? (current ? [current] : []) : items, env, mediaLoader);
+    let result = { summary: '本板块当前没有可总结的有效讨论。', reply: null };
+    if (batched) {
+      result = await summarizeBatches({ batches, category, env, gh, root: roots.context.id, rows: contextRows, llm, prompt, rules: outputRules, proposalTableRequired, mediaLoader });
+      result.reply = null;
+      if (trigger.active) {
+        const answerRules = `${rules}\n只判断是否回复本次触发消息，并返回常规 JSON。summary 填写简短占位文字，脚本只使用 reply。`;
+        const answer = validateResult(await llm(messages(prompt, answerRules, [], { discussions: [current], trigger, summary: result.summary }, media.parts)));
+        result.reply = answer.reply;
+      }
+    } else if (items.length) {
+      result = validateResult(await llm(messages(prompt, outputRules, inputContext, source, media.parts)));
+    }
     if (proposalTableRequired && items.length) {
-      if (result.proposals?.length) {
+      if (!batched && result.proposals?.length) {
         const reviewed = validateResult(await llm(messages(prompt, `${outputRules}\n\n${proposalReviewInstructions}`, [],
           { discussions: items, draft: result }, media.parts)));
         result = { ...reviewed, reply: result.reply };

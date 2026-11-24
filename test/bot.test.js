@@ -107,6 +107,31 @@ class FakeGitHub {
 }
 const fixture = () => ({ gh: new FakeGitHub(), env: { LLM_API_KEY: 'test', LLM_MODEL: 'model' },
   prompt: 'system', rules: 'rules', event: { sender: { login: 'alice' }, discussion: { number: 1, node_id: 'human', body: '/ask what?' } } });
+test('interrupted batch runs resume from App-owned checkpoints and publish only a complete summary', async () => {
+  const options = fixture();
+  options.event = {};
+  Object.assign(options.env, { GITHUB_REPOSITORY: 'owner/repo', BOT_APP_LOGIN: 'discussion-curator', BOT_BATCH_THREADS: '2' });
+  const first = options.gh.rows[0];
+  for (let number = 2; number <= 5; number++) options.gh.rows.push({ ...first, id: `thread-${number}`, number });
+  const calls = [];
+  let fail = true;
+  options.llm = async msg => {
+    const payload = JSON.parse(msg.at(-1).content);
+    const key = payload.drafts ? 'merge' : payload.discussions.map(d => d.number).join(',');
+    calls.push(key);
+    if (fail && key === '3,4') throw new Error('HTTP 524');
+    return { summary: key, reply: null };
+  };
+  await assert.rejects(main(options), /524/);
+  assert.equal(options.gh.docs.size, 0);
+  assert.equal(options.gh.comments.get('Discussion Bot — summary'), undefined);
+  fail = false;
+  await main(options);
+  assert.deepEqual(calls, ['1,2', '3,4', '3,4', '5', 'merge']);
+  assert.equal(options.gh.comments.get('Discussion Bot — summary')[0].body, [...options.gh.docs.values()][0]);
+  await main(options);
+  assert.equal(calls.length, 5);
+});
 test('proposal summaries rebuild matching legacy cache and publish source-backed rows', async () => {
   const options = fixture();
   options.event = {};
