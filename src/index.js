@@ -275,7 +275,10 @@ export async function generate(msg, env = process.env, transport = request, wait
       if (!transient || attempt === attempts) throw error;
       const advertised = error.retryAfter;
       const retryAfter = !advertised ? 0 : /^\d+$/.test(advertised) ? Number(advertised) * 1000 : Date.parse(advertised) - Date.now();
-      if (retryAfter > 60000) throw error;
+      if (retryAfter > 180000) {
+        console.warn(`Model provider requested a cooldown of ${Math.ceil(retryAfter / 1000)} s; retry limit is 180 s`);
+        throw error;
+      }
       const delay = Math.max(retryAfter || 0, 2000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 1000));
       console.warn(`Retrying model request after ${error.status ?? 'network failure'} (${attempt + 1}/${attempts}, ${delay} ms)`);
       await wait(delay);

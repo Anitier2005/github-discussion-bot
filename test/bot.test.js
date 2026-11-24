@@ -45,17 +45,17 @@ test('HTTP failure does not expose provider body or token', async () => {
 });
 test('model retries gateway timeouts and honors provider backoff', async () => {
   const delays = [];
-  const responses = [new Response(null, { status: 524 }), new Response(null, { status: 429, headers: { 'Retry-After': '8' } }),
+  const responses = [new Response(null, { status: 524, headers: { 'Retry-After': '120' } }), new Response(null, { status: 429, headers: { 'Retry-After': '8' } }),
     Response.json({ choices: [{ message: { content: '{"summary":"done"}' } }] })];
   const result = await generate([], {}, (url, token, payload) => request(url, token, payload, undefined, async () => responses.shift()),
     async delay => { delays.push(delay); });
   assert.equal(result.summary, 'done');
   assert.equal(delays.length, 2);
-  assert.ok(delays[0] >= 2000 && delays[0] < 3000);
+  assert.equal(delays[0], 120000);
   assert.equal(delays[1], 8000);
 });
 test('model limits transient attempts and fails fast on permanent errors or long cooldowns', async () => {
-  for (const [status, retryAfter, expectedCalls] of [[524, undefined, 3], [401, undefined, 1], [429, '120', 1]]) {
+  for (const [status, retryAfter, expectedCalls] of [[524, undefined, 3], [401, undefined, 1], [429, '181', 1]]) {
     let calls = 0;
     await assert.rejects(generate([], {}, async () => {
       calls++;
