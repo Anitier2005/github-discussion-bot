@@ -14,6 +14,8 @@
 
 目标仓库启用 Discussions，保留至少一个开放讨论分类（不是只允许维护者发帖的公告分类）。复制 `deploy/discussion-bot.yml` 到目标 `.github/workflows/`，将 Action 引用固定为发布的完整 commit SHA。复制 `.github/discussion-bot/rules.md` 到目标同路径，并按项目要求编辑。
 
+已有部署升级时，同时更新 Action 引用和目标仓库的规范。新版规范启用方案状态表，逐行展示方案、状态、提出者、依据与整帖来源。配置方法和已验证的提交见[方案状态表与升级](docs/guide.md#方案状态表与升级)。
+
 目标仓库或所属组织的 Settings → Secrets and variables → Actions（组织级配置需授权目标仓库；Free 组织的私有仓库不支持使用组织级 Secrets/Variables，详见使用指南）：
 
 | 类型 | 名称 | 内容 |
@@ -41,7 +43,7 @@
 
 ## 运行与限制
 
-Actions → Discussion bot → Run workflow；选 init_only 只建立两个帖，不消耗 LLM。配好 API 后在普通板块创建测试帖，编辑原文、发 `/ask` 并检查 doc 与汇总评论。`npm test` 或 `node --test` 执行本地测试。
+在 **Actions → Discussion bot → Run workflow** 手动运行。已有历史讨论时，保持 `init_only` 未勾选，即可按板块生成首版总结并写入 `doc/discussions/`。勾选 `init_only` 只创建缺少的专用帖。配好 API 后可以发测试帖、编辑原文或发 `/ask`，再检查总结和同步文档。`npm test` 或 `node --test` 执行本地测试。
 
 模型一次处理一个板块全部当前内容；为保留语义和稳定前缀不静默截断。大型仓库需选足够上下文窗口和 GitHub 单次请求额度；超限会失败并可重跑。模型没有联网验证能力，纠错可靠性受上下文证据限制。GitHub 评论和文件提交不是跨资源事务，失败时可能短暂不同步，重跑会修复。正文校验限制 55000 字符。不要在可信上下文或项目规范中放秘密。目标分支若保护禁止直接写入，需为机器人配置允许的写入策略或后续扩展 PR 模式。
 
