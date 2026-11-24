@@ -378,7 +378,15 @@ export async function generate(msg, env = process.env, transport = request, wait
     }
   }
   let value;
-  try { value = JSON.parse(response.choices[0].message.content); } catch { throw new Error('Model response is not a JSON object'); }
+  const choice = response?.choices?.[0];
+  const content = choice?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) {
+    const finish = /^[a-z_]+$/.test(choice?.finish_reason ?? '') ? choice.finish_reason : 'unknown';
+    throw new Error(`Model returned no text (finish_reason=${finish})`);
+  }
+  const output = content.trim();
+  const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(output);
+  try { value = JSON.parse(fenced ? fenced[1] : output); } catch { throw new Error('Model response is not a JSON object'); }
   return validateResult(value);
 }
 

@@ -43,6 +43,11 @@ test('HTTP failure does not expose provider body or token', async () => {
   await assert.rejects(request('https://provider.example/v1', 'secret-value', {}, undefined,
     async () => ({ ok: false, status: 401, text: async () => 'secret-value' })), /^Error: HTTP 401 from provider.example$/);
 });
+test('model accepts fenced JSON and reports empty output without logging provider text', async () => {
+  const response = content => ({ choices: [{ finish_reason: 'stop', message: { content } }] });
+  assert.equal((await generate([], {}, async () => response('```json\n{"summary":"done"}\n```'))).summary, 'done');
+  await assert.rejects(generate([], {}, async () => response('')), /no text \(finish_reason=stop\)/);
+});
 test('model retries gateway timeouts and honors provider backoff', async () => {
   const delays = [];
   const responses = [new Response(null, { status: 524, headers: { 'Retry-After': '120' } }), new Response(null, { status: 429, headers: { 'Retry-After': '8' } }),
