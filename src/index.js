@@ -239,7 +239,24 @@ export function summaryBatches(items, maxThreads = 3) {
   return batches;
 }
 
-async function summarizeBatches({ batches, category, env, gh, root, rows, llm, prompt, rules, proposalTableRequired, mediaLoader }) {
+async function validateProposalDraft(result, discussions, revise) {
+  function normalize(draft) {
+    const marker = '<!-- proposal-table -->';
+    if (Array.isArray(draft.proposals) && !draft.summary.includes(marker)) {
+      draft = { ...draft, summary: `${draft.summary.trimEnd()}\n\n${marker}` };
+    }
+    renderProposals(draft, discussions);
+    return draft;
+  }
+  try {
+    return normalize(result);
+  } catch (error) {
+    console.warn(`Repairing proposal output: ${error.message}`);
+    return normalize(validateResult(await revise(result, error.message)));
+  }
+}
+
+async function summarizeBatches({ batches, items, category, env, gh, root, rows, llm, prompt, rules, proposalTableRequired, mediaLoader }) {
   const owned = ownedByApp(env.BOT_APP_LOGIN);
   const drafts = [];
   const failures = [];
@@ -262,7 +279,8 @@ async function summarizeBatches({ batches, category, env, gh, root, rows, llm, p
       result = validateResult(await llm(messages(prompt, batchRules, [], source, media.parts)));
       if (proposalTableRequired) {
         if (result.proposals?.length) result = validateResult(await llm(messages(prompt, `${batchRules}\n${proposalReviewInstructions}`, [], { ...source, draft: result }, media.parts)));
-        renderProposals(result, batch);
+        result = await validateProposalDraft(result, batch, (draft, validation_error) =>
+          llm(messages(prompt, `${batchRules}\n${proposalReviewInstructions}`, [], { ...source, draft, validation_error }, media.parts)));
       }
     } catch (error) {
       if (!isTransient(error) || error.status === 429 || error.deferRun || !env.BOT_APP_LOGIN) throw error;
@@ -282,7 +300,10 @@ async function summarizeBatches({ batches, category, env, gh, root, rows, llm, p
   if (failures.length) throw new Error(`Summary incomplete for category=${category}; rerun to resume deferred batches: ${failures.join(', ')}`);
   const mergeRules = `${rules}\n你收到同一板块的所有批次摘要。合并重复项，保留各批次的疑问、共识、决定和原文链接，reply 为 null。方案的消息 ID 和原文引语必须来自批次草稿；只在已有证据支持时更新状态，不要编造新证据。`;
   console.log(`Summary category=${category} merging ${drafts.length} batches`);
-  return validateResult(await llm(messages(prompt, mergeRules, [], { drafts })));
+  const merge = validateResult(await llm(messages(prompt, mergeRules, [], { drafts })));
+  if (!proposalTableRequired) return merge;
+  return validateProposalDraft(merge, items, (draft, validation_error) =>
+    llm(messages(prompt, mergeRules, [], { drafts, draft, validation_error })));
 }
 
 export function readContext(rows, repo, appLogin) {
@@ -462,7 +483,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
     const media = await prepareMedia(batched ? (current ? [current] : []) : items, env, mediaLoader);
     let result = { summary: '本板块当前没有可总结的有效讨论。', reply: null };
     if (batched) {
-      result = await summarizeBatches({ batches, category, env, gh, root: roots.context.id, rows: contextRows, llm, prompt, rules: outputRules, proposalTableRequired, mediaLoader });
+      result = await summarizeBatches({ batches, items, category, env, gh, root: roots.context.id, rows: contextRows, llm, prompt, rules: outputRules, proposalTableRequired, mediaLoader });
       result.reply = null;
       if (trigger.active) {
         const answerRules = `${rules}\n只判断是否回复本次触发消息，并返回常规 JSON。summary 填写简短占位文字，脚本只使用 reply。`;

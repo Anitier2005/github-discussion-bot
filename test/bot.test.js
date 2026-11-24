@@ -174,6 +174,23 @@ test('proposal summaries rebuild matching legacy cache and publish source-backed
   assert.equal(calls, 4);
   assert.equal(comment.body, previousDoc);
 });
+test('batch summaries repair missing proposal data and insert missing table markers', async () => {
+  const options = fixture();
+  options.event = {};
+  options.env.BOT_BATCH_THREADS = '1';
+  options.rules = '议题、方案、状态、提出者、判定依据、来源';
+  options.gh.rows.push({ ...options.gh.rows[0], id: 'other', number: 2 });
+  let repairs = 0;
+  options.llm = async msg => {
+    const source = JSON.parse(msg.at(-1).content);
+    if (source.validation_error) repairs++;
+    if (source.discussions?.[0].id === 'human' && !source.validation_error) return { summary: 'missing proposals' };
+    return { summary: 'draft without marker', proposals: [] };
+  };
+  await main(options);
+  assert.equal(repairs, 1);
+  assert.match([...options.gh.docs.values()][0], /### 方案状态/);
+});
 test('reconcile summarizes once, syncs bytes, reuses replies on edit and removes deleted sources', async () => {
   const options = fixture(); let calls = 0;
   options.llm = async () => { calls++; return { summary: '# 共识\n需要证据', reply: { reason: 'ask', body: 'answer' } }; };
