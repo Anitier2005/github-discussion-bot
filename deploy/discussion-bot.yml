@@ -8,6 +8,10 @@ on:
     types: [created, edited, deleted]
   workflow_dispatch:
     inputs:
+      model_probe:
+        description: Test the model with synthetic input only
+        type: boolean
+        default: false
       init_only:
         description: Only initialize summary and context discussions
         type: boolean
@@ -28,6 +32,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Create repository-scoped App token
+        if: ${{ !inputs.model_probe }}
         id: app-token
         uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
@@ -38,6 +43,7 @@ jobs:
           permission-contents: write
           permission-discussions: write
       - uses: actions/checkout@v4
+        if: ${{ !inputs.model_probe }}
         with:
           persist-credentials: false
       # Replace REPLACE_WITH_COMMIT_SHA with the published personal repository commit.
@@ -57,3 +63,4 @@ jobs:
           BOT_CATEGORY: ${{ vars.BOT_CATEGORY }}
           BOT_RULES_PATH: .github/discussion-bot/rules.md
           BOT_INIT_ONLY: ${{ inputs.init_only && 'true' || 'false' }}
+          BOT_MODEL_PROBE: ${{ inputs.model_probe && 'true' || 'false' }}
