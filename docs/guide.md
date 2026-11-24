@@ -15,6 +15,7 @@
 | Secrets | `BOT_APP_PRIVATE_KEY` | 必填，GitHub App 私钥 PEM 全文 |
 | Variables | `LLM_MODEL` | 必填，服务商实际支持的模型 ID |
 | Variables | `LLM_TIMEOUT_SECONDS` | 模型请求超时秒数，默认 300，允许 30–600 |
+| Variables | `LLM_MAX_ATTEMPTS` | 每次模型调用最多尝试几次（含首次），默认 3，允许 1–5 |
 | Variables | `LLM_BASE_URL` | 默认 `https://api.openai.com/v1`，必须 HTTPS |
 | Variables | `BOT_SYSTEM_PROMPT` | 系统提示词全文；空值回退到独立 MD |
 | Variables | `BOT_BLACKLIST` | 黑名单 JSON，默认 `{}` |
@@ -211,6 +212,6 @@ node --test
 | 重复专用帖报错 | 保留正确的一组，移除其他帖主楼的机器人标记 |
 | 自建 runner Node 24 不支持 | 升级 Actions runner |
 
-日志不打印密钥、请求头或服务商正文。GitHub HTTP 超时 120 秒，模型默认 300 秒，可通过 LLM_TIMEOUT_SECONDS 调整为 30–600 秒；工作流上限 30 分钟。网络错误显示安全的错误代码，超时显示 TIMEOUT。不无限重试可能计费的模型请求，失败可手动重跑。
+日志只记录错误类型、尝试次数和等待时间。模型调用遇到临时网络故障、限流或网关超时（包括 HTTP 524）时，按指数退避并加随机延迟重试。服务端提供 `Retry-After` 时，至少等待其指定的时间。指定时间超过 60 秒时，本次运行结束，可在冷却结束后手动重跑。认证失败、请求参数错误和无效响应直接报错。重试可能产生额外模型费用。工作流上限为 60 分钟，重跑会复用内容未变化且已完成的板块。
 
 每个变化的板块以全部有效内容作为模型输入，包括分页评论和回复。大型仓库需要大上下文模型，分类列表当前最多读取 100 个分类。删除专用帖后下次运行会重建。模型总结与事实纠错仍需维护者审阅。

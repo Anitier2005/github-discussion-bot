@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { setDefaultResultOrder } from 'node:dns';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { prepareMedia } from './media.js';
 import { proposalFormat, proposalInstructions, proposalReviewInstructions, hasProposalTable, renderProposals } from './proposals.js';
 
@@ -40,8 +41,15 @@ export function stable(value) {
 }
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const byCreated = (a, b) => compare(a.createdAt, b.createdAt) || compare(a.id, b.id);
+const transientNetwork = new Set(['TIMEOUT', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET']);
+
+function networkError(url, error, signal) {
+  const code = signal.aborted || error.name === 'TimeoutError' ? 'TIMEOUT' : String(error.cause?.code ?? 'NETWORK_ERROR').replace(/[^A-Z0-9_]/g, '').slice(0, 40);
+  return Object.assign(new Error(`Request failed for ${new URL(url).host} (${code}); check network and endpoint`), { retryable: transientNetwork.has(code) });
+}
 
 export async function request(url, token, payload, method, fetcher = fetch, timeoutMs = 120000) {
+  const signal = AbortSignal.timeout(timeoutMs);
   let response;
   try {
     response = await fetcher(url, {
@@ -49,19 +57,23 @@ export async function request(url, token, payload, method, fetcher = fetch, time
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
         Accept: 'application/vnd.github+json', 'User-Agent': 'discussion-curator' },
       body: payload === undefined ? undefined : JSON.stringify(payload),
-      signal: AbortSignal.timeout(timeoutMs), redirect: 'error',
+      signal, redirect: 'error',
     });
   } catch (error) {
-    const code = error.name === 'TimeoutError' ? 'TIMEOUT' : String(error.cause?.code ?? 'NETWORK_ERROR').replace(/[^A-Z0-9_]/g, '').slice(0, 40);
-    throw new Error(`Request failed for ${new URL(url).host} (${code}); check network and endpoint`);
+    throw networkError(url, error, signal);
   }
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status} from ${new URL(url).host}`);
     error.status = response.status;
+    error.retryAfter = response.headers?.get('retry-after');
+    await response.body?.cancel().catch(() => {});
     throw error;
   }
   // Do not log provider bodies or request headers (may contain secrets).
-  try { return await response.json(); } catch { throw new Error('API returned invalid JSON'); }
+  try { return await response.json(); } catch (error) {
+    if (error instanceof SyntaxError) throw new Error('API returned invalid JSON');
+    throw networkError(url, error, signal);
+  }
 }
 
 export class GitHub {
@@ -188,14 +200,32 @@ export function validateResult(value) {
   if (value.summary.length > 55000 || (reply?.body.length ?? 0) > 55000) throw new Error('Model response too long for GitHub');
   return value;
 }
-export async function generate(msg, env = process.env, transport = request) {
+export async function generate(msg, env = process.env, transport = request, wait = sleep) {
   const endpoint = (env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
   if (new URL(endpoint).protocol !== 'https:') throw new Error('LLM_BASE_URL must use HTTPS');
   const seconds = Number(env.LLM_TIMEOUT_SECONDS || 300);
   if (!Number.isInteger(seconds) || seconds < 30 || seconds > 600) throw new Error('LLM_TIMEOUT_SECONDS must be an integer from 30 to 600');
-  const response = await transport(`${endpoint}/chat/completions`, env.LLM_API_KEY, {
+  const attempts = Number(env.LLM_MAX_ATTEMPTS || 3);
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 5) throw new Error('LLM_MAX_ATTEMPTS must be an integer from 1 to 5');
+  const payload = {
     model: env.LLM_MODEL, messages: msg, response_format: { type: 'json_object' },
-  }, undefined, undefined, seconds * 1000);
+  };
+  let response;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      response = await transport(`${endpoint}/chat/completions`, env.LLM_API_KEY, payload, undefined, undefined, seconds * 1000);
+      break;
+    } catch (error) {
+      const transient = error.retryable || [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524].includes(error.status);
+      if (!transient || attempt === attempts) throw error;
+      const advertised = error.retryAfter;
+      const retryAfter = !advertised ? 0 : /^\d+$/.test(advertised) ? Number(advertised) * 1000 : Date.parse(advertised) - Date.now();
+      if (retryAfter > 60000) throw error;
+      const delay = Math.max(retryAfter || 0, 2000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 1000));
+      console.warn(`Retrying model request after ${error.status ?? 'network failure'} (${attempt + 1}/${attempts}, ${delay} ms)`);
+      await wait(delay);
+    }
+  }
   let value;
   try { value = JSON.parse(response.choices[0].message.content); } catch { throw new Error('Model response is not a JSON object'); }
   return validateResult(value);

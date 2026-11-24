@@ -43,6 +43,27 @@ test('HTTP failure does not expose provider body or token', async () => {
   await assert.rejects(request('https://provider.example/v1', 'secret-value', {}, undefined,
     async () => ({ ok: false, status: 401, text: async () => 'secret-value' })), /^Error: HTTP 401 from provider.example$/);
 });
+test('model retries gateway timeouts and honors provider backoff', async () => {
+  const delays = [];
+  const responses = [new Response(null, { status: 524 }), new Response(null, { status: 429, headers: { 'Retry-After': '8' } }),
+    Response.json({ choices: [{ message: { content: '{"summary":"done"}' } }] })];
+  const result = await generate([], {}, (url, token, payload) => request(url, token, payload, undefined, async () => responses.shift()),
+    async delay => { delays.push(delay); });
+  assert.equal(result.summary, 'done');
+  assert.equal(delays.length, 2);
+  assert.ok(delays[0] >= 2000 && delays[0] < 3000);
+  assert.equal(delays[1], 8000);
+});
+test('model limits transient attempts and fails fast on permanent errors or long cooldowns', async () => {
+  for (const [status, retryAfter, expectedCalls] of [[524, undefined, 3], [401, undefined, 1], [429, '120', 1]]) {
+    let calls = 0;
+    await assert.rejects(generate([], {}, async () => {
+      calls++;
+      throw Object.assign(new Error('provider failed'), { status, retryAfter });
+    }, async () => {}), /provider failed/);
+    assert.equal(calls, expectedCalls);
+  }
+});
 test('GitHub paginates all comments', async () => {
   const gh = new GitHub({});
   let calls = 0;

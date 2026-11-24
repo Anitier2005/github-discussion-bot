@@ -25,7 +25,7 @@ jobs:
       cancel-in-progress: false
       queue: max
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Create repository-scoped App token
         id: app-token
@@ -49,6 +49,7 @@ jobs:
           LLM_BASE_URL: ${{ vars.LLM_BASE_URL || 'https://api.openai.com/v1' }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           LLM_TIMEOUT_SECONDS: ${{ vars.LLM_TIMEOUT_SECONDS || '300' }}
+          LLM_MAX_ATTEMPTS: ${{ vars.LLM_MAX_ATTEMPTS || '3' }}
           BOT_BLACKLIST: ${{ vars.BOT_BLACKLIST || '{}' }}
           BOT_MEDIA_HOSTS: ${{ vars.BOT_MEDIA_HOSTS }}
           BOT_SYSTEM_PROMPT: ${{ vars.BOT_SYSTEM_PROMPT }}
