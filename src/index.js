@@ -182,15 +182,55 @@ function ownedByApp(appLogin) {
   return actor => Boolean(login && actor?.__typename === 'Bot' && actor.login.replace(/\[bot\]$/, '').toLowerCase() === login);
 }
 
+function* splitMessage(message) {
+  if (Buffer.byteLength(message.body) <= 7500) {
+    yield message;
+    return;
+  }
+  let body = '', bytes = 0;
+  for (const character of message.body) {
+    const size = Buffer.byteLength(character);
+    if (bytes + size > 7500) {
+      yield { ...message, body };
+      body = '';
+      bytes = 0;
+    }
+    body += character;
+    bytes += size;
+  }
+  if (body) yield { ...message, body };
+}
+
+function* splitThread(item) {
+  const heading = { ...item, body: '', comments: [] };
+  if (Buffer.byteLength(item.body) <= 2000) heading.body = item.body;
+  else for (const part of splitMessage(item)) yield { ...heading, body: part.body };
+  let comments = [];
+  for (const comment of item.comments ?? []) {
+    for (const part of splitMessage(comment)) {
+      if (comments.length && (comments.at(-1).id === part.id || Buffer.byteLength(stable({ ...heading, comments: [...comments, part] })) > 12000)) {
+        yield { ...heading, comments };
+        comments = [];
+      }
+      comments.push(part);
+    }
+  }
+  if (comments.length || heading.body) yield { ...heading, comments };
+}
+
 export function summaryBatches(items, maxThreads = 3) {
   const batches = [];
   let batch = [], bytes = 0;
   for (const item of items) {
     const size = Buffer.byteLength(stable(item));
-    if (batch.length && (batch.length === maxThreads || bytes + size > 32000)) {
+    if (batch.length && (batch.length === maxThreads || bytes + size > 12000)) {
       batches.push(batch);
       batch = [];
       bytes = 0;
+    }
+    if (size > 12000) {
+      for (const fragment of splitThread(item)) batches.push([fragment]);
+      continue;
     }
     batch.push(item);
     bytes += size;

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Anitier2005. See LICENSE for terms and warranty disclaimer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GitHub, main, TAG, SUMMARY, CONTEXT, blacklist, excluded, messages, systemPrompt, validateResult, generate, request, readContext } from '../src/index.js';
+import { GitHub, main, TAG, SUMMARY, CONTEXT, blacklist, excluded, messages, systemPrompt, validateResult, generate, request, readContext, summaryBatches } from '../src/index.js';
 
 test('stable prefix preserves system and context when source changes', () => {
   const a = messages('prompt', 'rules', [{ body: 'context' }], { body: 'old' });
@@ -107,6 +107,14 @@ class FakeGitHub {
 }
 const fixture = () => ({ gh: new FakeGitHub(), env: { LLM_API_KEY: 'test', LLM_MODEL: 'model' },
   prompt: 'system', rules: 'rules', event: { sender: { login: 'alice' }, discussion: { number: 1, node_id: 'human', body: '/ask what?' } } });
+test('oversize discussions retain all Unicode text and original evidence IDs across bounded fragments', () => {
+  const root = { id: 'root', number: 1, body: '文'.repeat(4000), comments: [{ id: 'comment', parentId: 'parent', body: '📎'.repeat(6000) }] };
+  const fragments = summaryBatches([root], 1).flat();
+  assert.equal(fragments.map(item => item.body).join(''), root.body);
+  assert.equal(fragments.flatMap(item => item.comments).map(comment => comment.body).join(''), root.comments[0].body);
+  assert.ok(fragments.every(item => item.id === root.id && Buffer.byteLength(JSON.stringify(item)) <= 12000));
+  assert.ok(fragments.flatMap(item => item.comments).every(comment => comment.id === 'comment' && comment.parentId === 'parent'));
+});
 test('interrupted batch runs resume from App-owned checkpoints and publish only a complete summary', async () => {
   const options = fixture();
   options.event = {};
