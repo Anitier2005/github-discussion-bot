@@ -42,6 +42,8 @@ export function stable(value) {
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const byCreated = (a, b) => compare(a.createdAt, b.createdAt) || compare(a.id, b.id);
 const transientNetwork = new Set(['TIMEOUT', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET']);
+const transientStatus = new Set([408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]);
+const isTransient = error => error.retryable || transientStatus.has(error.status);
 
 function networkError(url, error, signal) {
   const code = signal.aborted || error.name === 'TimeoutError' ? 'TIMEOUT' : String(error.cause?.code ?? 'NETWORK_ERROR').replace(/[^A-Z0-9_]/g, '').slice(0, 40);
@@ -200,6 +202,8 @@ export function summaryBatches(items, maxThreads = 3) {
 async function summarizeBatches({ batches, category, env, gh, root, rows, llm, prompt, rules, proposalTableRequired, mediaLoader }) {
   const owned = ownedByApp(env.BOT_APP_LOGIN);
   const drafts = [];
+  const failures = [];
+  let consecutiveFailures = 0;
   for (const batch of batches) {
     const source = { discussions: batch };
     const batchRules = `${rules}\n这是板块的一批讨论。提炼本批的待解疑问、共识和方案，保留原文链接和消息 ID。保持简洁，reply 为 null。`;
@@ -213,17 +217,29 @@ async function summarizeBatches({ batches, category, env, gh, root, rows, llm, p
     const started = Date.now();
     console.log(`Summary category=${category} batch=${key.slice(0, 12)} threads=${batch.length} source_bytes=${Buffer.byteLength(stable(source))}`);
     const media = await prepareMedia(batch, env, mediaLoader);
-    let result = validateResult(await llm(messages(prompt, batchRules, [], source, media.parts)));
-    if (proposalTableRequired) {
-      if (result.proposals?.length) result = validateResult(await llm(messages(prompt, `${batchRules}\n${proposalReviewInstructions}`, [], { ...source, draft: result }, media.parts)));
-      renderProposals(result, batch);
+    let result;
+    try {
+      result = validateResult(await llm(messages(prompt, batchRules, [], source, media.parts)));
+      if (proposalTableRequired) {
+        if (result.proposals?.length) result = validateResult(await llm(messages(prompt, `${batchRules}\n${proposalReviewInstructions}`, [], { ...source, draft: result }, media.parts)));
+        renderProposals(result, batch);
+      }
+    } catch (error) {
+      if (!isTransient(error) || error.status === 429 || error.deferRun || !env.BOT_APP_LOGIN) throw error;
+      const batchId = key.slice(0, 12);
+      failures.push(batchId);
+      console.warn(`Summary batch=${batchId} deferred after retries: ${error.message}`);
+      if (++consecutiveFailures === 2) break;
+      continue;
     }
+    consecutiveFailures = 0;
     const draft = { summary: result.summary, proposals: result.proposals, reply: null };
     const checkpoint = prefix + JSON.stringify(draft);
     if (env.BOT_APP_LOGIN && checkpoint.length <= 60000) await gh.comment(root, checkpoint);
     drafts.push(draft);
     console.log(`Summary batch=${key.slice(0, 12)} completed in ${Date.now() - started} ms`);
   }
+  if (failures.length) throw new Error(`Summary incomplete for category=${category}; rerun to resume deferred batches: ${failures.join(', ')}`);
   const mergeRules = `${rules}\n你收到同一板块的所有批次摘要。合并重复项，保留各批次的疑问、共识、决定和原文链接，reply 为 null。方案的消息 ID 和原文引语必须来自批次草稿；只在已有证据支持时更新状态，不要编造新证据。`;
   console.log(`Summary category=${category} merging ${drafts.length} batches`);
   return validateResult(await llm(messages(prompt, mergeRules, [], { drafts })));
@@ -271,12 +287,16 @@ export async function generate(msg, env = process.env, transport = request, wait
       response = await transport(`${endpoint}/chat/completions`, env.LLM_API_KEY, payload, undefined, undefined, seconds * 1000);
       break;
     } catch (error) {
-      const transient = error.retryable || [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524].includes(error.status);
-      if (!transient || attempt === attempts) throw error;
+      if (!isTransient(error)) throw error;
       const advertised = error.retryAfter;
       const retryAfter = !advertised ? 0 : /^\d+$/.test(advertised) ? Number(advertised) * 1000 : Date.parse(advertised) - Date.now();
       if (retryAfter > 180000) {
         console.warn(`Model provider requested a cooldown of ${Math.ceil(retryAfter / 1000)} s; retry limit is 180 s`);
+        error.deferRun = true;
+        throw error;
+      }
+      if (attempt === attempts) {
+        if (retryAfter > 0) error.deferRun = true;
         throw error;
       }
       const delay = Math.max(retryAfter || 0, 2000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 1000));

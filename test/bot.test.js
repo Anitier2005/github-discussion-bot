@@ -119,15 +119,15 @@ test('interrupted batch runs resume from App-owned checkpoints and publish only 
     const payload = JSON.parse(msg.at(-1).content);
     const key = payload.drafts ? 'merge' : payload.discussions.map(d => d.number).join(',');
     calls.push(key);
-    if (fail && key === '3,4') throw new Error('HTTP 524');
+    if (fail && key === '3,4') throw Object.assign(new Error('HTTP 524'), { status: 524 });
     return { summary: key, reply: null };
   };
-  await assert.rejects(main(options), /524/);
+  await assert.rejects(main(options), /rerun to resume deferred batches/);
   assert.equal(options.gh.docs.size, 0);
   assert.equal(options.gh.comments.get('Discussion Bot — summary'), undefined);
   fail = false;
   await main(options);
-  assert.deepEqual(calls, ['1,2', '3,4', '3,4', '5', 'merge']);
+  assert.deepEqual(calls, ['1,2', '3,4', '5', '3,4', 'merge']);
   assert.equal(options.gh.comments.get('Discussion Bot — summary')[0].body, [...options.gh.docs.values()][0]);
   await main(options);
   assert.equal(calls.length, 5);
