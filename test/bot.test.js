@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Anitier2005. See LICENSE for terms and warranty disclaimer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GitHub, main, TAG, SUMMARY, CONTEXT, blacklist, excluded, messages, systemPrompt, validateResult, generate, request, readContext, summaryBatches } from '../src/index.js';
+import { GitHub, main, TAG, SUMMARY, CONTEXT, blacklist, excluded, messages, systemPrompt, validateResult, generate, request, appendContext, readContext, summaryBatches } from '../src/index.js';
 
 test('stable prefix preserves system and context when source changes', () => {
   const a = messages('prompt', 'rules', [{ body: 'context' }], { body: 'old' });
@@ -107,6 +107,14 @@ class FakeGitHub {
 }
 const fixture = () => ({ gh: new FakeGitHub(), env: { LLM_API_KEY: 'test', LLM_MODEL: 'model' },
   prompt: 'system', rules: 'rules', event: { sender: { login: 'alice' }, discussion: { number: 1, node_id: 'human', body: '/ask what?' } } });
+test('published context contains no literal mention and restores the original message', async () => {
+  const gh = new FakeGitHub();
+  const record = { id: 'record', repo: 'owner/repo', messages: [{ role: 'user', content: '@alice @owner/team alice@example.org' }] };
+  await appendContext(gh, 'context', [], record, 'discussion-curator');
+  const rows = gh.comments.get('context');
+  assert.doesNotMatch(rows[0].body, /@/);
+  assert.deepEqual(readContext(rows, record.repo, 'discussion-curator')[0].messages, record.messages);
+});
 test('oversize discussions retain all Unicode text and original evidence IDs across bounded fragments', () => {
   const root = { id: 'root', number: 1, body: '文'.repeat(4000), comments: [{ id: 'comment', parentId: 'parent', body: '📎'.repeat(6000) }] };
   const fragments = summaryBatches([root], 1).flat();
@@ -128,11 +136,13 @@ test('interrupted batch runs resume from App-owned checkpoints and publish only 
     const key = payload.drafts ? 'merge' : payload.discussions.map(d => d.number).join(',');
     calls.push(key);
     if (fail && key === '3,4') throw Object.assign(new Error('HTTP 524'), { status: 524 });
-    return { summary: key, reply: null };
+    if (payload.drafts) assert.ok(payload.drafts.every(d => d.summary.endsWith(' @alice')));
+    return { summary: `${key} @alice`, reply: null };
   };
   await assert.rejects(main(options), /rerun to resume deferred batches/);
   assert.equal(options.gh.docs.size, 0);
   assert.equal(options.gh.comments.get('Discussion Bot — summary'), undefined);
+  for (const row of options.gh.comments.get('Discussion Bot — context')) assert.doesNotMatch(row.body, /@/);
   fail = false;
   await main(options);
   assert.deepEqual(calls, ['1,2', '3,4', '5', '3,4', 'merge']);

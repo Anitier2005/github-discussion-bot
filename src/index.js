@@ -177,6 +177,9 @@ export function messages(prompt, rules, context, source, media = []) {
 const JOURNAL = `${TAG}\n<!-- context-record:v1 -->\n`;
 const BATCH = `${TAG}\n<!-- summary-batch:v1 -->\n`;
 
+// GitHub receives no literal @, while JSON.parse restores the original text.
+const contextJSON = value => stable(value).replaceAll('@', '\\u0040');
+
 function ownedByApp(appLogin) {
   const login = appLogin?.replace(/\[bot\]$/, '').toLowerCase();
   return actor => Boolean(login && actor?.__typename === 'Bot' && actor.login.replace(/\[bot\]$/, '').toLowerCase() === login);
@@ -301,7 +304,7 @@ async function summarizeBatches({ batches, items, category, env, gh, root, rows,
     }
     consecutiveFailures = 0;
     const draft = { summary: result.summary, proposals: result.proposals, reply: null };
-    const checkpoint = prefix + JSON.stringify(draft).replaceAll('@', '\\u0040');
+    const checkpoint = prefix + contextJSON(draft);
     if (env.BOT_APP_LOGIN && checkpoint.length <= 60000) await gh.comment(root, checkpoint);
     drafts.push(draft);
     console.log(`Summary batch=${key.slice(0, 12)} completed in ${Date.now() - started} ms`);
@@ -330,7 +333,7 @@ export function readContext(rows, repo, appLogin) {
 }
 export async function appendContext(gh, root, existing, record, appLogin) {
   if (!appLogin || !record.repo || existing.some(c => c.recordId === record.id)) return;
-  const body = JOURNAL + stable(record).replaceAll('@', '\\u0040');
+  const body = JOURNAL + contextJSON(record);
   if (body.length > 60000) throw new Error('Context record exceeds GitHub comment limit');
   await gh.comment(root, body);
 }
