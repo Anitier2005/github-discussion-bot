@@ -56,3 +56,5 @@ Copyright (C) 2026 Anitier2005。
 你可以按 GPL v3 使用、修改和再分发本项目；再分发时应保留版权及许可证声明，并按许可证要求提供对应源码。本软件不提供任何担保。
 
 工作流引用的第三方 Action 仍遵循各自许可证。配置中的 App 私钥、模型密钥不属于应分享的源码，不要提交到仓库。
+
+Set the action environment variable `BOT_DOC_DIR` to change the repository-relative output directory (for example, `docs/discussions`). The default is `doc/discussions`.

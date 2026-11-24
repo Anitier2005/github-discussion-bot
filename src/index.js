@@ -68,6 +68,8 @@ export class GitHub {
   constructor(env = process.env, transport = request) {
     this.token = env.GH_TOKEN;
     this.repo = env.GITHUB_REPOSITORY;
+    this.docDir = env.BOT_DOC_DIR || 'doc/discussions';
+    if (!/^[\w-]+(?:\/[\w-]+)*$/.test(this.docDir)) throw new Error('BOT_DOC_DIR must be a repository-relative directory');
     this.transport = transport;
   }
   async gql(query, variables = {}) {
@@ -124,7 +126,7 @@ export class GitHub {
     await this.gql('mutation($input:DeleteDiscussionCommentInput!){deleteDiscussionComment(input:$input){clientMutationId}}', { input: { id } });
   }
   async doc(key, body) {
-    const url = `https://api.github.com/repos/${this.repo}/contents/doc/discussions/${key}.md`;
+    const url = `https://api.github.com/repos/${this.repo}/contents/${this.docDir}/${key}.md`;
     let old;
     try { old = await this.transport(url, this.token); } catch (error) { if (error.status !== 404) throw error; }
     if (old && Buffer.from(old.content, 'base64').equals(Buffer.from(body))) return;
@@ -225,7 +227,7 @@ export async function main({ env = process.env, gh = new GitHub(env), event, llm
       const categories = meta.discussionCategories.nodes;
       const category = env.BOT_CATEGORY ? categories.find(c => c.name === env.BOT_CATEGORY) : categories.find(c => !c.isAnswerable);
       if (!category) throw new Error('Enable Discussions and configure BOT_CATEGORY as an open category');
-      const description = kind === 'summary' ? '自动总结索引：每个板块一条回复；正文与 doc/discussions 完全一致。' :
+      const description = kind === 'summary' ? '自动总结索引：每个板块一条回复；正文与仓库中的同步文档完全一致。' :
         '仓库隔离的追加式上下文。主帖不进入模型输入。脚本只读取当前 App 写入且未被其他身份编辑的结构化记录，按创建顺序保留 user/assistant 角色；人类与其他机器人评论不参与上下文。模型不能修改本帖。';
       roots[kind] = await gh.create(meta.id, category.id, `Discussion Bot — ${kind}`, `${marker}\n\n${description}`);
     }
